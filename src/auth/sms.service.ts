@@ -12,10 +12,18 @@ export class SmsService {
     this.isDevMode = this.configService.get<boolean>('app.otp.devMode', true);
 
     if (!this.isDevMode) {
-      this.client = new Twilio(
-        this.configService.get<string>('twilio.accountSid'),
-        this.configService.get<string>('twilio.authToken'),
-      );
+      try {
+        const accountSid = this.configService.get<string>('twilio.accountSid');
+        const authToken = this.configService.get<string>('twilio.authToken');
+        
+        if (accountSid && accountSid.startsWith('AC')) {
+          this.client = new Twilio(accountSid, authToken);
+        } else {
+          this.logger.warn('Twilio Account SID is missing or invalid. SMS sending will fail.');
+        }
+      } catch (err) {
+        this.logger.error('Failed to initialize Twilio client', err);
+      }
     }
   }
 
@@ -23,6 +31,11 @@ export class SmsService {
     if (this.isDevMode) {
       this.logger.warn(`[DEV MODE] OTP for ${phone}: ${otp}`);
       return;
+    }
+
+    if (!this.client) {
+      this.logger.error(`Cannot send OTP to ${phone} - Twilio client is not initialized Check ENV variables.`);
+      throw new Error('SMS service is not properly configured.');
     }
 
     try {
