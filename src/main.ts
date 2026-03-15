@@ -24,7 +24,19 @@ async function bootstrap() {
     .filter(Boolean);
 
   // ── Security ──────────────────────────────────────────────────────────────
-  app.use(helmet());
+  app.use(
+    helmet({
+      contentSecurityPolicy: {
+        directives: {
+          defaultSrc: ["'self'"],
+          scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", 'https://cdnjs.cloudflare.com'],
+          styleSrc: ["'self'", "'unsafe-inline'", 'https://cdnjs.cloudflare.com', 'https://fonts.googleapis.com'],
+          fontSrc: ["'self'", 'https://fonts.gstatic.com'],
+          imgSrc: ["'self'", 'data:', 'https://cdnjs.cloudflare.com'],
+        },
+      },
+    })
+  );
   const compMethod = (compression as any).default || compression;
   app.use(compMethod());
 
