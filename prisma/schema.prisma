@@ -1,0 +1,166 @@
+// FreshBhoj - Prisma Schema
+// PostgreSQL + Full Relational Model
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum UserRole {
+  USER
+  VENDOR
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  BANNED
+  PENDING_PROFILE
+}
+
+enum OtpPurpose {
+  LOGIN
+  VERIFY_PHONE
+  RESET
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// USER
+// ─────────────────────────────────────────────────────────────────────────────
+
+model User {
+  id            String     @id @default(uuid())
+  phone         String     @unique
+  fullName      String?
+  email         String?    @unique
+  profileImage  String?    // S3/CDN URL
+  role          UserRole   @default(USER)
+  status        UserStatus @default(PENDING_PROFILE)
+  isPhoneVerified Boolean  @default(false)
+
+  // Location (last known)
+  latitude      Float?
+  longitude     Float?
+  address       String?
+  city          String?
+  state         String?
+  pincode       String?
+
+  // Metadata
+  fcmToken      String?    // Firebase push token
+  lastLoginAt   DateTime?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  // Relations
+  refreshTokens RefreshToken[]
+  otpLogs       OtpLog[]
+
+  @@map("users")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WEBSITE PRE-REGISTRATION (WAITLIST)
+// ─────────────────────────────────────────────────────────────────────────────
+
+model WebUserPreRegistration {
+  id              String   @id @default(uuid())
+  role            String   @default("USER") // For web context, always 'USER' here
+  fullName        String
+  mobileNo        String   // Can't unique constraint globally if they try multiple times, but let's make it unique relative to waitlist
+  email           String?
+  state           String?
+  city            String?
+  areaPincode     String?
+  
+  aboutYourself   String?  // 'STUDENT', 'PROFESSIONAL', 'FAMILY', 'OTHER'
+  taste           String?  // 'VEG', 'NON_VEG', 'BOTH'
+  lookingFor      String?  // 'DAILY_TIFFIN', 'OCCASIONAL', 'STREET_FOOD', 'HOME_STYLE'
+
+  isVerified      Boolean  @default(false)
+  
+  createdAt       DateTime @default(now())
+
+  @@map("web_user_preregistration")
+}
+
+model WebKitchenPreRegistration {
+  id                 String   @id @default(uuid())
+  kitchenName        String
+  contactPerson      String
+  mobileNo           String   
+  email              String?
+  
+  vendorType         String?  // 'CLOUD_KITCHEN', 'TIFFIN_SERVICE', 'STREET_FOOD', 'RESTAURANT'
+  avgMealPrice       String?  // '50-100', '100-200', '200-350', '350+'
+  
+  state              String?
+  city               String?
+  
+  fssaiStatus        String?  // 'REGISTERED', 'APPLIED'
+  fssaiLicenseNo     String?
+  gstNumber          String?
+  
+  deliveryCapability String?  // 'SELF', 'FRESHBHOJ'
+  serviceTiming      String[] // e.g. ['BREAKFAST', 'LUNCH', 'DINNER']
+  
+  interestedInReels  Boolean  @default(false)
+  whyJoinFreshbhoj   String?
+
+  isVerified         Boolean  @default(false)
+
+  createdAt          DateTime @default(now())
+
+  @@map("web_kitchen_preregistration")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OTP LOG
+// ─────────────────────────────────────────────────────────────────────────────
+
+model OtpLog {
+  id          String     @id @default(uuid())
+  phone       String
+  otp         String     // Hashed
+  purpose     OtpPurpose @default(LOGIN)
+  attempts    Int        @default(0)
+  maxAttempts Int        @default(5)
+  isUsed      Boolean    @default(false)
+  expiresAt   DateTime
+  createdAt   DateTime   @default(now())
+
+  // Optional: link to user if already exists
+  userId      String?
+  user        User?      @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([phone, isUsed])
+  @@map("otp_logs")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// REFRESH TOKEN
+// ─────────────────────────────────────────────────────────────────────────────
+
+model RefreshToken {
+  id          String   @id @default(uuid())
+  token       String   @unique // Hashed
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deviceInfo  String?  // e.g. "iPhone 15 / iOS 17"
+  ipAddress   String?
+  isRevoked   Boolean  @default(false)
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
