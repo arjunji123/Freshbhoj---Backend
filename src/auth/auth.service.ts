@@ -129,8 +129,12 @@ export class AuthService {
       );
     }
 
-    // Get stored hashed OTP
-    const storedHash = await this.redis.getOtp(phone);
+    // Fallback to reading from Database OTP log (because Redis is disabled)
+    const otpLog = await this.prisma.otpLog.findFirst({
+      where: { phone, isUsed: false, expiresAt: { gt: new Date() } },
+      orderBy: { createdAt: 'desc' },
+    });
+    const storedHash = otpLog?.otp;
     if (!storedHash) {
       throw new BadRequestException('OTP expired or not found. Please request a new OTP.');
     }
