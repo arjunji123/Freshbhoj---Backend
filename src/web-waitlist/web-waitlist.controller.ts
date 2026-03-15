@@ -1,6 +1,6 @@
 import { Controller, Post, Body, HttpCode, HttpStatus } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBody } from '@nestjs/swagger';
-import { Public } from '@/common/decorators/public.decorator';
+import { Public } from '../common/decorators/public.decorator';
 import { WebWaitlistService } from './web-waitlist.service';
 import { CreateWebUserDto, CreateWebKitchenDto } from './dto/web-waitlist.dto';
 
