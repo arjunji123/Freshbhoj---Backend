@@ -25,7 +25,8 @@ async function bootstrap() {
 
   // ── Security ──────────────────────────────────────────────────────────────
   app.use(helmet());
-  app.use(compression());
+  const compMethod = (compression as any).default || compression;
+  app.use(compMethod());
 
   // ── CORS ──────────────────────────────────────────────────────────────────
   app.enableCors({

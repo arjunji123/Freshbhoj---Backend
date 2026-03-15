@@ -16,7 +16,8 @@ export default async function bootstrap(req: any, res: any) {
     const apiPrefix = configService.get<string>('API_PREFIX', 'api/v1');
 
     app.use(helmet());
-    app.use(compression());
+    const compMethod = (compression as any).default || compression;
+    app.use(compMethod());
 
     app.enableCors({
       origin: true,
