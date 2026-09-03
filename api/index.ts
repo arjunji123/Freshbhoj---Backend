@@ -1,10 +1,10 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import helmet from 'helmet';
 import * as compression from 'compression';
 import { AppModule } from '../src/app.module';
+import { setupSwagger } from '../src/swagger';
 
 let appInstance: any;
 
@@ -47,21 +47,8 @@ export default async function bootstrap(req: any, res: any) {
       }),
     );
 
-    const swaggerConfig = new DocumentBuilder()
-      .setTitle('FreshBhoj API')
-      .setDescription('The FreshBhoj API documentation')
-      .setVersion('1.0')
-      .build();
-
-    const document = SwaggerModule.createDocument(app, swaggerConfig);
-    SwaggerModule.setup(`${apiPrefix}/docs`, app, document, {
-      customCssUrl:
-        'https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/4.15.5/swagger-ui.min.css',
-      customJs: [
-        'https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/4.15.5/swagger-ui-bundle.js',
-        'https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/4.15.5/swagger-ui-standalone-preset.js',
-      ],
-    });
+    // Same Swagger setup as the standalone server: /swagger and /{apiPrefix}/docs.
+    setupSwagger(app, apiPrefix);
 
     await app.init();
     appInstance = app.getHttpAdapter().getInstance();

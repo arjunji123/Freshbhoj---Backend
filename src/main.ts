@@ -2,10 +2,10 @@ import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, VersioningType } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import helmet from 'helmet';
 import * as compression from 'compression';
 import { AppModule } from './app.module';
+import { setupSwagger } from './swagger';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor';
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
@@ -73,36 +73,8 @@ async function bootstrap() {
   );
 
   // ── Swagger / OpenAPI ─────────────────────────────────────────────────────
-  const swaggerConfig = new DocumentBuilder()
-    .setTitle('FreshBhoj API')
-    .setDescription('The FreshBhoj API documentation for Onboarding, Auth, and more.')
-    .setVersion('1.0')
-    .addBearerAuth(
-      {
-        type: 'http',
-        scheme: 'bearer',
-        bearerFormat: 'JWT',
-        name: 'JWT',
-        description: 'Enter JWT token',
-        in: 'header',
-      },
-      'JWT-auth', // This name must match the one used in @ApiBearerAuth()
-    )
-    .build();
-
-  const document = SwaggerModule.createDocument(app, swaggerConfig);
-  // Serve the swagger UI at /api/v1/docs
-  SwaggerModule.setup(`${apiPrefix}/docs`, app, document, {
-    swaggerOptions: {
-      persistAuthorization: true,
-    },
-    customCssUrl:
-      'https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/4.15.5/swagger-ui.min.css',
-    customJs: [
-      'https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/4.15.5/swagger-ui-bundle.js',
-      'https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/4.15.5/swagger-ui-standalone-preset.js',
-    ],
-  });
+  // Served at /swagger and /{apiPrefix}/docs.
+  setupSwagger(app, apiPrefix);
 
   await app.listen(port);
 
@@ -110,7 +82,8 @@ async function bootstrap() {
   ╔══════════════════════════════════════════════════╗
   ║           🍱 FreshBhoj Backend Server            ║
   ║──────────────────────────────────────────────────║
-  ║  URL     : http://localhost:${port}/${apiPrefix}      ║
+  ║  API     : http://localhost:${port}/${apiPrefix}
+  ║  Swagger : http://localhost:${port}/swagger
   ║  Env     : ${configService.get('NODE_ENV', 'development').padEnd(38)}║
   ╚══════════════════════════════════════════════════╝
   `);

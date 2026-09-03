@@ -38,32 +38,46 @@ enum OtpPurpose {
 // ─────────────────────────────────────────────────────────────────────────────
 
 model User {
-  id            String     @id @default(uuid())
-  phone         String     @unique
-  fullName      String?
-  email         String?    @unique
-  profileImage  String?    // S3/CDN URL
-  role          UserRole   @default(USER)
-  status        UserStatus @default(PENDING_PROFILE)
-  isPhoneVerified Boolean  @default(false)
+  id              String     @id @default(uuid())
+  phone           String     @unique
+  fullName        String?
+  email           String?    @unique
+  profileImage    String? // S3/CDN URL
+  role            UserRole   @default(USER)
+  status          UserStatus @default(PENDING_PROFILE)
+  isPhoneVerified Boolean    @default(false)
 
   // Location (last known)
-  latitude      Float?
-  longitude     Float?
-  address       String?
-  city          String?
-  state         String?
-  pincode       String?
+  latitude  Float?
+  longitude Float?
+  address   String?
+  city      String?
+  state     String?
+  pincode   String?
 
   // Metadata
-  fcmToken      String?    // Firebase push token
-  lastLoginAt   DateTime?
-  createdAt     DateTime   @default(now())
-  updatedAt     DateTime   @updatedAt
+  fcmToken    String? // Firebase push token
+  lastLoginAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   // Relations
   refreshTokens RefreshToken[]
   otpLogs       OtpLog[]
+
+  // Commerce relations
+  addresses              Address[]
+  cart                   Cart?
+  orders                 Order[]
+  reviews                Review[]
+  favorites              Favorite[]
+  kitchenFollows         KitchenFollow[]
+  reelLikes              ReelLike[]
+  reelSaves              ReelSave[]
+  savedCards             SavedCard[]
+  storyViews             KitchenStoryView[]
+  ownedKitchens          Kitchen[]               @relation("KitchenOwner")
+  notificationPreference NotificationPreference?
 
   @@map("users")
 }
@@ -73,52 +87,52 @@ model User {
 // ─────────────────────────────────────────────────────────────────────────────
 
 model WebUserPreRegistration {
-  id              String   @id @default(uuid())
-  role            String   @default("USER") // For web context, always 'USER' here
-  fullName        String
-  mobileNo        String   // Can't unique constraint globally if they try multiple times, but let's make it unique relative to waitlist
-  email           String?
-  state           String?
-  city            String?
-  areaPincode     String?
-  
-  aboutYourself   String?  // 'STUDENT', 'PROFESSIONAL', 'FAMILY', 'OTHER'
-  taste           String?  // 'VEG', 'NON_VEG', 'BOTH'
-  lookingFor      String?  // 'DAILY_TIFFIN', 'OCCASIONAL', 'STREET_FOOD', 'HOME_STYLE'
+  id          String  @id @default(uuid())
+  role        String  @default("USER") // For web context, always 'USER' here
+  fullName    String
+  mobileNo    String // Can't unique constraint globally if they try multiple times, but let's make it unique relative to waitlist
+  email       String?
+  state       String?
+  city        String?
+  areaPincode String?
 
-  isVerified      Boolean  @default(false)
-  
-  createdAt       DateTime @default(now())
+  aboutYourself String? // 'STUDENT', 'PROFESSIONAL', 'FAMILY', 'OTHER'
+  taste         String? // 'VEG', 'NON_VEG', 'BOTH'
+  lookingFor    String? // 'DAILY_TIFFIN', 'OCCASIONAL', 'STREET_FOOD', 'HOME_STYLE'
+
+  isVerified Boolean @default(false)
+
+  createdAt DateTime @default(now())
 
   @@map("web_user_preregistration")
 }
 
 model WebKitchenPreRegistration {
-  id                 String   @id @default(uuid())
-  kitchenName        String
-  contactPerson      String
-  mobileNo           String   
-  email              String?
-  
-  vendorType         String?  // 'CLOUD_KITCHEN', 'TIFFIN_SERVICE', 'STREET_FOOD', 'RESTAURANT'
-  avgMealPrice       String?  // '50-100', '100-200', '200-350', '350+'
-  
-  state              String?
-  city               String?
-  
-  fssaiStatus        String?  // 'REGISTERED', 'APPLIED'
-  fssaiLicenseNo     String?
-  gstNumber          String?
-  
-  deliveryCapability String?  // 'SELF', 'FRESHBHOJ'
+  id            String  @id @default(uuid())
+  kitchenName   String
+  contactPerson String
+  mobileNo      String
+  email         String?
+
+  vendorType   String? // 'CLOUD_KITCHEN', 'TIFFIN_SERVICE', 'STREET_FOOD', 'RESTAURANT'
+  avgMealPrice String? // '50-100', '100-200', '200-350', '350+'
+
+  state String?
+  city  String?
+
+  fssaiStatus    String? // 'REGISTERED', 'APPLIED'
+  fssaiLicenseNo String?
+  gstNumber      String?
+
+  deliveryCapability String? // 'SELF', 'FRESHBHOJ'
   serviceTiming      String[] // e.g. ['BREAKFAST', 'LUNCH', 'DINNER']
-  
-  interestedInReels  Boolean  @default(false)
-  whyJoinFreshbhoj   String?
 
-  isVerified         Boolean  @default(false)
+  interestedInReels Boolean @default(false)
+  whyJoinFreshbhoj  String?
 
-  createdAt          DateTime @default(now())
+  isVerified Boolean @default(false)
+
+  createdAt DateTime @default(now())
 
   @@map("web_kitchen_preregistration")
 }
@@ -130,7 +144,7 @@ model WebKitchenPreRegistration {
 model OtpLog {
   id          String     @id @default(uuid())
   phone       String
-  otp         String     // Hashed
+  otp         String // Hashed
   purpose     OtpPurpose @default(LOGIN)
   attempts    Int        @default(0)
   maxAttempts Int        @default(5)
@@ -139,8 +153,8 @@ model OtpLog {
   createdAt   DateTime   @default(now())
 
   // Optional: link to user if already exists
-  userId      String?
-  user        User?      @relation(fields: [userId], references: [id], onDelete: SetNull)
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([phone, isUsed])
   @@map("otp_logs")
@@ -151,16 +165,891 @@ model OtpLog {
 // ─────────────────────────────────────────────────────────────────────────────
 
 model RefreshToken {
-  id          String   @id @default(uuid())
-  token       String   @unique // Hashed
-  userId      String
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  deviceInfo  String?  // e.g. "iPhone 15 / iOS 17"
-  ipAddress   String?
-  isRevoked   Boolean  @default(false)
-  expiresAt   DateTime
-  createdAt   DateTime @default(now())
+  id         String   @id @default(uuid())
+  token      String   @unique // Hashed
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deviceInfo String? // e.g. "iPhone 15 / iOS 17"
+  ipAddress  String?
+  isRevoked  Boolean  @default(false)
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
 
   @@index([userId])
   @@map("refresh_tokens")
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// COMMERCE DOMAIN — Kitchens, Meals, Cart, Orders, Reviews, Reels
+// ═════════════════════════════════════════════════════════════════════════════
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum KitchenStatus {
+  PENDING
+  ACTIVE
+  PAUSED
+  SUSPENDED
+}
+
+/// Broad meal slot a dish belongs to. Drives the Home "Meal categories" grid.
+enum MealSlot {
+  BREAKFAST
+  LUNCH
+  DINNER
+  SNACKS
+}
+
+/// Indian food-app veg/non-veg convention. Drives the coloured dot indicator.
+enum FoodType {
+  VEG
+  EGG
+  NON_VEG
+  VEGAN
+}
+
+/// Goal-based quick filters on Home. Core to the FreshBhoj nutrition promise.
+enum GoalTag {
+  HIGH_PROTEIN
+  LOW_CALORIE
+  WEIGHT_LOSS
+  MUSCLE_GAIN
+  HEALTHY_LIFESTYLE
+}
+
+enum OrderStatus {
+  PENDING_PAYMENT
+  PLACED
+  ACCEPTED
+  PREPARING
+  OUT_FOR_DELIVERY
+  DELIVERED
+  CANCELLED
+}
+
+enum PaymentMethod {
+  UPI
+  CARD
+  WALLET
+  COD
+}
+
+enum PaymentStatus {
+  PENDING
+  PROCESSING
+  PAID
+  FAILED
+  REFUNDED
+}
+
+enum AddressLabel {
+  HOME
+  WORK
+  OTHER
+}
+
+enum DeliverySlotType {
+  NOW
+  SCHEDULED
+}
+
+enum MediaType {
+  IMAGE
+  VIDEO
+}
+
+enum ReelStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum CouponType {
+  FLAT
+  PERCENT
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SERVICEABILITY — single-city launch (Jaipur)
+// ─────────────────────────────────────────────────────────────────────────────
+
+model ServiceableArea {
+  id        String   @id @default(uuid())
+  city      String
+  state     String   @default("Rajasthan")
+  locality  String
+  pincode   String
+  latitude  Float?
+  longitude Float?
+  isActive  Boolean  @default(true)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([city, locality])
+  @@index([pincode])
+  @@index([isActive, city])
+  @@map("serviceable_areas")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// KITCHEN
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Kitchen {
+  id          String        @id @default(uuid())
+  slug        String        @unique
+  name        String
+  tagline     String?
+  description String?
+  logoUrl     String?
+  coverImage  String?
+  isVerified  Boolean       @default(false)
+  status      KitchenStatus @default(ACTIVE)
+
+  // Trust / quality signals
+  fssaiLicense  String?
+  hygieneScore  Float?
+  rating        Float   @default(0)
+  ratingCount   Int     @default(0)
+  followerCount Int     @default(0)
+
+  // Location
+  addressLine String?
+  locality    String?
+  city        String  @default("Jaipur")
+  state       String  @default("Rajasthan")
+  pincode     String?
+  latitude    Float?
+  longitude   Float?
+
+  // Operations
+  prepTimeMins      Int     @default(30)
+  opensAt           String  @default("08:00") // HH:mm, IST
+  closesAt          String  @default("22:00")
+  isAcceptingOrders Boolean @default(true)
+  contactPhone      String?
+
+  ownerId String?
+  owner   User?   @relation("KitchenOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+
+  /// The partner login that manages this kitchen.
+  accountId String?         @unique
+  account   KitchenAccount? @relation(fields: [accountId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  meals     Meal[]
+  media     KitchenMedia[]
+  reels     Reel[]
+  stories   KitchenStory[]
+  reviews   Review[]
+  orders    Order[]
+  followers KitchenFollow[]
+
+  @@index([status, city])
+  @@index([isVerified])
+  @@map("kitchens")
+}
+
+/// Phase-1 lightweight gallery ("Fresh made today" photos / short clips).
+model KitchenMedia {
+  id           String    @id @default(uuid())
+  kitchenId    String
+  kitchen      Kitchen   @relation(fields: [kitchenId], references: [id], onDelete: Cascade)
+  type         MediaType @default(IMAGE)
+  url          String
+  thumbnailUrl String?
+  caption      String?
+  sortOrder    Int       @default(0)
+  createdAt    DateTime  @default(now())
+
+  @@index([kitchenId, sortOrder])
+  @@map("kitchen_media")
+}
+
+model KitchenFollow {
+  id        String   @id @default(uuid())
+  userId    String
+  kitchenId String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kitchen   Kitchen  @relation(fields: [kitchenId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, kitchenId])
+  @@index([kitchenId])
+  @@map("kitchen_follows")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MEAL CATALOG
+// ─────────────────────────────────────────────────────────────────────────────
+
+model MealCategory {
+  id        String    @id @default(uuid())
+  slug      String    @unique
+  name      String
+  iconUrl   String?
+  slot      MealSlot?
+  sortOrder Int       @default(0)
+  isActive  Boolean   @default(true)
+  createdAt DateTime  @default(now())
+
+  meals Meal[]
+
+  @@map("meal_categories")
+}
+
+model Meal {
+  id         String        @id @default(uuid())
+  kitchenId  String
+  kitchen    Kitchen       @relation(fields: [kitchenId], references: [id], onDelete: Cascade)
+  categoryId String?
+  category   MealCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  /// Style of food (Thali, Biryani…) — drives the Home pills and carousel.
+  cuisineId  String?
+  cuisine    Cuisine?      @relation(fields: [cuisineId], references: [id], onDelete: SetNull)
+
+  name        String
+  slug        String
+  description String?
+  images      String[] @default([])
+
+  price        Int // paise-free: whole rupees
+  mrp          Int? // strike-through price
+  isAvailable  Boolean @default(true)
+  isBestseller Boolean @default(false)
+
+  foodType FoodType   @default(VEG)
+  slots    MealSlot[] @default([])
+  goalTags GoalTag[]  @default([])
+
+  // ── Nutrition transparency (per serving) ───────────────────────────────
+  calories    Int?
+  proteinG    Float?
+  carbsG      Float?
+  fatG        Float?
+  fiberG      Float?
+  servingSize String? // e.g. "450 g bowl"
+  ingredients String[] @default([])
+  allergens   String[] @default([])
+
+  prepTimeMins Int   @default(25)
+  rating       Float @default(0)
+  ratingCount  Int   @default(0)
+  orderCount   Int   @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  customizationGroups MealCustomizationGroup[]
+  cartItems           CartItem[]
+  orderItems          OrderItem[]
+  reviews             Review[]
+  reels               Reel[]
+  stories             KitchenStory[]
+  favorites           Favorite[]
+
+  @@unique([kitchenId, slug])
+  @@index([isAvailable, kitchenId])
+  @@index([categoryId])
+  @@index([cuisineId])
+  @@map("meals")
+}
+
+/// e.g. "Add-ons" → Extra Butter +₹30 / Gulab Jamun +₹45 / Raita +₹25
+model MealCustomizationGroup {
+  id         String  @id @default(uuid())
+  mealId     String
+  meal       Meal    @relation(fields: [mealId], references: [id], onDelete: Cascade)
+  name       String
+  isRequired Boolean @default(false)
+  minSelect  Int     @default(0)
+  maxSelect  Int     @default(5)
+  sortOrder  Int     @default(0)
+
+  options MealCustomizationOption[]
+
+  @@index([mealId])
+  @@map("meal_customization_groups")
+}
+
+model MealCustomizationOption {
+  id          String                 @id @default(uuid())
+  groupId     String
+  group       MealCustomizationGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  name        String
+  priceDelta  Int                    @default(0)
+  isDefault   Boolean                @default(false)
+  isAvailable Boolean                @default(true)
+  sortOrder   Int                    @default(0)
+
+  @@index([groupId])
+  @@map("meal_customization_options")
+}
+
+model Favorite {
+  id        String   @id @default(uuid())
+  userId    String
+  mealId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  meal      Meal     @relation(fields: [mealId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, mealId])
+  @@map("favorites")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ADDRESSES
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Address {
+  id            String       @id @default(uuid())
+  userId        String
+  user          User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  label         AddressLabel @default(HOME)
+  customLabel   String?
+  receiverName  String?
+  receiverPhone String?
+  line1         String
+  line2         String?
+  landmark      String?
+  locality      String?
+  city          String       @default("Jaipur")
+  state         String       @default("Rajasthan")
+  pincode       String
+  latitude      Float?
+  longitude     Float?
+  isDefault     Boolean      @default(false)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  orders Order[]
+
+  @@index([userId, isDefault])
+  @@map("addresses")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CART
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Cart {
+  id         String   @id @default(uuid())
+  userId     String   @unique
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  couponCode String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  items CartItem[]
+
+  @@map("carts")
+}
+
+model CartItem {
+  id                  String   @id @default(uuid())
+  cartId              String
+  cart                Cart     @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  mealId              String
+  meal                Meal     @relation(fields: [mealId], references: [id], onDelete: Cascade)
+  quantity            Int      @default(1)
+  /// Snapshot of chosen option ids — validated against the meal on every read.
+  customizationIds    String[] @default([])
+  specialInstructions String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@index([cartId])
+  @@map("cart_items")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// COUPONS
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Coupon {
+  id            String     @id @default(uuid())
+  code          String     @unique
+  title         String
+  description   String?
+  type          CouponType @default(FLAT)
+  value         Int // rupees for FLAT, percent for PERCENT
+  minOrderValue Int        @default(0)
+  maxDiscount   Int? // caps PERCENT coupons
+  validFrom     DateTime   @default(now())
+  validTill     DateTime
+  usageLimit    Int? // total redemptions allowed
+  perUserLimit  Int        @default(1)
+  usedCount     Int        @default(0)
+  isActive      Boolean    @default(true)
+  createdAt     DateTime   @default(now())
+
+  @@index([isActive, validTill])
+  @@map("coupons")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ORDERS
+// ─────────────────────────────────────────────────────────────────────────────
+
+model DeliveryPartner {
+  id            String   @id @default(uuid())
+  name          String
+  phone         String
+  photoUrl      String?
+  vehicleNumber String?
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+
+  orders Order[]
+
+  @@map("delivery_partners")
+}
+
+model Order {
+  id          String  @id @default(uuid())
+  orderNumber String  @unique // e.g. FB-92834
+  userId      String
+  user        User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kitchenId   String
+  kitchen     Kitchen @relation(fields: [kitchenId], references: [id], onDelete: Restrict)
+
+  addressId       String?
+  address         Address? @relation(fields: [addressId], references: [id], onDelete: SetNull)
+  /// Frozen copy of the address at placement time — addresses can be edited later.
+  addressSnapshot Json
+
+  status OrderStatus @default(PENDING_PAYMENT)
+
+  // ── Money (whole rupees) ───────────────────────────────────────────────
+  itemsTotal  Int
+  deliveryFee Int     @default(0)
+  taxes       Int     @default(0)
+  discount    Int     @default(0)
+  totalAmount Int
+  couponCode  String?
+
+  paymentMethod PaymentMethod @default(UPI)
+  paymentStatus PaymentStatus @default(PENDING)
+  paymentRef    String?
+
+  slotType     DeliverySlotType @default(NOW)
+  scheduledFor DateTime?
+  orderNotes   String?
+
+  etaMinutes   Int       @default(30)
+  placedAt     DateTime?
+  acceptedAt   DateTime?
+  deliveredAt  DateTime?
+  cancelledAt  DateTime?
+  cancelReason String?
+
+  deliveryPartnerId String?
+  deliveryPartner   DeliveryPartner? @relation(fields: [deliveryPartnerId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items   OrderItem[]
+  events  OrderStatusEvent[]
+  reviews Review[]
+
+  @@index([userId, createdAt])
+  @@index([kitchenId, status])
+  @@map("orders")
+}
+
+model OrderItem {
+  id      String  @id @default(uuid())
+  orderId String
+  order   Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  mealId  String?
+  meal    Meal?   @relation(fields: [mealId], references: [id], onDelete: SetNull)
+
+  // Snapshots — a meal can be renamed, repriced or deleted after the order.
+  name                String
+  imageUrl            String?
+  unitPrice           Int
+  quantity            Int
+  customizations      Json    @default("[]")
+  lineTotal           Int
+  specialInstructions String?
+
+  @@index([orderId])
+  @@map("order_items")
+}
+
+model OrderStatusEvent {
+  id        String      @id @default(uuid())
+  orderId   String
+  order     Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  status    OrderStatus
+  note      String?
+  createdAt DateTime    @default(now())
+
+  @@index([orderId, createdAt])
+  @@map("order_status_events")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// REVIEWS
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Review {
+  id        String  @id @default(uuid())
+  userId    String
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kitchenId String
+  kitchen   Kitchen @relation(fields: [kitchenId], references: [id], onDelete: Cascade)
+  mealId    String?
+  meal      Meal?   @relation(fields: [mealId], references: [id], onDelete: SetNull)
+  orderId   String?
+  order     Order?  @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  rating     Int // 1..5
+  comment    String?
+  photos     String[] @default([])
+  /// Quick chips: "Clean", "Well-packed", "Eco-friendly"
+  tags       String[] @default([])
+  isVerified Boolean  @default(false)
+  likeCount  Int      @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([orderId, userId])
+  @@index([kitchenId, createdAt])
+  @@index([mealId, createdAt])
+  @@map("reviews")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// REELS / FOOD FEED
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Reel {
+  id        String  @id @default(uuid())
+  kitchenId String
+  kitchen   Kitchen @relation(fields: [kitchenId], references: [id], onDelete: Cascade)
+  /// Optional shoppable link — powers the "Add to cart" CTA on a reel.
+  mealId    String?
+  meal      Meal?   @relation(fields: [mealId], references: [id], onDelete: SetNull)
+
+  videoUrl     String
+  thumbnailUrl String?
+  caption      String?
+  hashtags     String[]   @default([])
+  durationSec  Int        @default(0)
+  status       ReelStatus @default(PUBLISHED)
+
+  viewCount    Int @default(0)
+  likeCount    Int @default(0)
+  shareCount   Int @default(0)
+  commentCount Int @default(0)
+
+  publishedAt DateTime @default(now())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  likes ReelLike[]
+  saves ReelSave[]
+
+  @@index([status, publishedAt])
+  @@index([kitchenId])
+  @@map("reels")
+}
+
+model ReelLike {
+  id        String   @id @default(uuid())
+  reelId    String
+  userId    String
+  reel      Reel     @relation(fields: [reelId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([reelId, userId])
+  @@index([userId])
+  @@map("reel_likes")
+}
+
+model ReelSave {
+  id        String   @id @default(uuid())
+  reelId    String
+  userId    String
+  reel      Reel     @relation(fields: [reelId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([reelId, userId])
+  @@index([userId])
+  @@map("reel_saves")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SETTINGS / SUPPORT
+// ─────────────────────────────────────────────────────────────────────────────
+
+model NotificationPreference {
+  id              String   @id @default(uuid())
+  userId          String   @unique
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orderUpdates    Boolean  @default(true)
+  promotions      Boolean  @default(true)
+  newKitchens     Boolean  @default(true)
+  reelActivity    Boolean  @default(false)
+  whatsappUpdates Boolean  @default(true)
+  updatedAt       DateTime @updatedAt
+
+  @@map("notification_preferences")
+}
+
+model FaqItem {
+  id        String  @id @default(uuid())
+  category  String  @default("GENERAL")
+  question  String
+  answer    String
+  sortOrder Int     @default(0)
+  isActive  Boolean @default(true)
+
+  @@index([isActive, category, sortOrder])
+  @@map("faq_items")
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// KITCHEN PARTNER ACCOUNTS
+//
+// Deliberately a separate identity from `User`. A phone number can belong to a
+// customer *and* to a kitchen partner — the same person may order lunch and run
+// a kitchen — and a single `User.role` column cannot express that. Two tables,
+// two OTP flows, two JWT audiences, enforced by `KitchenJwtStrategy`.
+// ═════════════════════════════════════════════════════════════════════════════
+
+enum KitchenAccountStatus {
+  /// Phone not yet verified.
+  PENDING_VERIFICATION
+  /// Verified, still filling in the onboarding steps.
+  ONBOARDING
+  /// Application submitted, waiting on the FreshBhoj team.
+  UNDER_REVIEW
+  /// Approved — the kitchen is live and can take orders.
+  ACTIVE
+  REJECTED
+  SUSPENDED
+}
+
+/// Ordered onboarding funnel. `KitchenAccount.onboardingStep` is the furthest
+/// step completed, so the partner app can always resume where they left off.
+enum KitchenOnboardingStep {
+  PHONE_VERIFIED
+  OWNER_DETAILS
+  KITCHEN_DETAILS
+  LOCATION
+  DOCUMENTS
+  BANK_DETAILS
+  MENU_SETUP
+  SUBMITTED
+  COMPLETED
+}
+
+enum KitchenDocumentType {
+  FSSAI
+  GST
+  PAN
+  AADHAAR
+  SHOP_LICENSE
+  BANK_PROOF
+  KITCHEN_PHOTOS
+}
+
+enum DocumentStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+model KitchenAccount {
+  id              String                @id @default(uuid())
+  phone           String                @unique
+  email           String?               @unique
+  ownerName       String?
+  isPhoneVerified Boolean               @default(false)
+  status          KitchenAccountStatus  @default(PENDING_VERIFICATION)
+  onboardingStep  KitchenOnboardingStep @default(PHONE_VERIFIED)
+
+  /// Set when the team rejects an application, shown verbatim in the partner app.
+  rejectionReason String?
+  submittedAt     DateTime?
+  approvedAt      DateTime?
+  lastLoginAt     DateTime?
+  fcmToken        String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  kitchen       Kitchen?
+  refreshTokens KitchenRefreshToken[]
+  documents     KitchenDocument[]
+  bankAccount   KitchenBankAccount?
+
+  @@index([status])
+  @@map("kitchen_accounts")
+}
+
+model KitchenRefreshToken {
+  id         String         @id @default(uuid())
+  token      String         @unique // hashed
+  accountId  String
+  account    KitchenAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  deviceInfo String?
+  isRevoked  Boolean        @default(false)
+  expiresAt  DateTime
+  createdAt  DateTime       @default(now())
+
+  @@index([accountId])
+  @@map("kitchen_refresh_tokens")
+}
+
+model KitchenDocument {
+  id        String              @id @default(uuid())
+  accountId String
+  account   KitchenAccount      @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  type      KitchenDocumentType
+  /// Licence / GSTIN / PAN number as typed by the partner.
+  number    String?
+  fileUrl   String
+  status    DocumentStatus      @default(PENDING)
+  remarks   String?
+  createdAt DateTime            @default(now())
+  updatedAt DateTime            @updatedAt
+
+  @@unique([accountId, type])
+  @@map("kitchen_documents")
+}
+
+model KitchenBankAccount {
+  id                 String         @id @default(uuid())
+  accountId          String         @unique
+  account            KitchenAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  accountHolderName  String
+  /// Only the last 4 digits are retained; the full number never touches our DB.
+  accountNumberLast4 String
+  ifsc               String
+  bankName           String?
+  upiId              String?
+  isVerified         Boolean        @default(false)
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+
+  @@map("kitchen_bank_accounts")
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// CUISINES — the horizontal pills and the cover-flow carousel on Home
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// Distinct from `MealCategory`: a category is a time slot (Breakfast, Lunch),
+/// a cuisine is a style of food (Thali, Biryani, South Indian). Home shows both.
+model Cuisine {
+  id        String   @id @default(uuid())
+  slug      String   @unique
+  name      String
+  /// Small circular icon for the pill row.
+  iconUrl   String?
+  /// Larger plate image for the cover-flow carousel.
+  imageUrl  String?
+  sortOrder Int      @default(0)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  meals Meal[]
+
+  @@index([isActive, sortOrder])
+  @@map("cuisines")
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// KITCHEN STORIES — 24-hour ephemeral clips, scoped to the viewer's city
+// ═════════════════════════════════════════════════════════════════════════════
+
+model KitchenStory {
+  id           String    @id @default(uuid())
+  kitchenId    String
+  kitchen      Kitchen   @relation(fields: [kitchenId], references: [id], onDelete: Cascade)
+  mediaType    MediaType @default(VIDEO)
+  mediaUrl     String
+  thumbnailUrl String?
+  caption      String?
+  /// Optional shoppable link, same idea as a reel.
+  mealId       String?
+  meal         Meal?     @relation(fields: [mealId], references: [id], onDelete: SetNull)
+
+  /// Denormalised from the kitchen so the city feed is a single indexed read.
+  city        String
+  durationSec Int      @default(15)
+  viewCount   Int      @default(0)
+  isActive    Boolean  @default(true)
+  /// Stories disappear after this instant. Set to +24h on publish.
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+
+  views KitchenStoryView[]
+
+  @@index([city, isActive, expiresAt])
+  @@index([kitchenId, expiresAt])
+  @@map("kitchen_stories")
+}
+
+/// Powers the seen/unseen ring around a story avatar.
+model KitchenStoryView {
+  id       String       @id @default(uuid())
+  storyId  String
+  userId   String
+  story    KitchenStory @relation(fields: [storyId], references: [id], onDelete: Cascade)
+  user     User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  viewedAt DateTime     @default(now())
+
+  @@unique([storyId, userId])
+  @@index([userId])
+  @@map("kitchen_story_views")
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// SAVED PAYMENT METHODS
+// ═════════════════════════════════════════════════════════════════════════════
+
+enum CardBrand {
+  VISA
+  MASTERCARD
+  RUPAY
+  AMEX
+  DINERS
+  UNKNOWN
+}
+
+/// PCI note: we never store a card number, CVV or expiry-with-PAN. Only the
+/// gateway's network token plus the display fragments needed to render the row.
+model SavedCard {
+  id           String    @id @default(uuid())
+  userId       String
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  brand        CardBrand @default(UNKNOWN)
+  last4        String
+  expiryMonth  Int
+  expiryYear   Int
+  holderName   String?
+  /// Opaque token issued by the payment gateway — the only thing that can charge.
+  gatewayToken String
+  gateway      String    @default("razorpay")
+  isDefault    Boolean   @default(false)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@unique([userId, gatewayToken])
+  @@index([userId, isDefault])
+  @@map("saved_cards")
 }

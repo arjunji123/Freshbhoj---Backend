@@ -20,6 +20,13 @@ export class HttpExceptionFilter implements ExceptionFilter {
     let status = HttpStatus.INTERNAL_SERVER_ERROR;
     let message = 'Internal server error';
     let errors: any = null;
+    /**
+     * Extra fields an exception chose to carry, e.g. the cart's
+     * `{ code: 'CART_KITCHEN_CONFLICT', existingKitchen }`. Without passing
+     * these through, the client can only see the status code and has no way to
+     * tell one 409 from another.
+     */
+    let details: Record<string, unknown> = {};
 
     if (exception instanceof HttpException) {
       status = exception.getStatus();
@@ -28,12 +35,13 @@ export class HttpExceptionFilter implements ExceptionFilter {
       if (typeof exceptionResponse === 'string') {
         message = exceptionResponse;
       } else if (typeof exceptionResponse === 'object') {
-        const res = exceptionResponse as any;
-        message = res.message || message;
-        if (Array.isArray(res.message)) {
-          errors = res.message;
+        const { message: rawMessage, statusCode, error, ...rest } = exceptionResponse as any;
+        message = rawMessage || message;
+        if (Array.isArray(rawMessage)) {
+          errors = rawMessage;
           message = 'Validation failed';
         }
+        details = rest;
       }
     } else if (exception instanceof Error) {
       message = exception.message;
@@ -52,6 +60,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
       statusCode: status,
       message,
       errors,
+      ...details,
       path: request.url,
       timestamp: new Date().toISOString(),
     });
