@@ -11,6 +11,7 @@ import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { RedisService } from '../../../redis/redis.service';
 import { SmsService } from './sms.service';
+import { ReferralService } from '../../platform/referral/referral.service';
 import { User, OtpPurpose } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { v4 as uuidv4 } from 'uuid';
@@ -49,6 +50,7 @@ export class AuthService {
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
     private readonly smsService: SmsService,
+    private readonly referralService: ReferralService,
   ) {}
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -164,6 +166,8 @@ export class AuthService {
       });
       isNewUser = true;
       this.logger.log(`New user registered: ${user.id} (${phone})`);
+      // Every user gets a shareable referral code from the moment they exist.
+      await this.referralService.getOrCreateCode(user.id);
     } else {
       // Existing user — update last login & mark phone verified
       user = await this.prisma.user.update({

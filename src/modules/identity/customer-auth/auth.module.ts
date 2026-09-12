@@ -7,6 +7,7 @@ import { AuthService } from './auth.service';
 import { SmsService } from './sms.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
+import { ReferralModule } from '../../platform/referral/referral.module';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { JwtAuthGuard } from './guards/jwt-auth.guard';
       }),
       inject: [ConfigService],
     }),
+    ReferralModule,
   ],
   controllers: [AuthController],
   providers: [AuthService, SmsService, JwtStrategy, JwtAuthGuard],

@@ -33,6 +33,11 @@ enum OtpPurpose {
   RESET
 }
 
+enum CoinTransactionReason {
+  REFERRAL_REFERRER_BONUS
+  REFERRAL_REFEREE_BONUS
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // USER
 // ─────────────────────────────────────────────────────────────────────────────
@@ -61,6 +66,14 @@ model User {
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
+  // Referral / FreshBhoj Coins
+  referralCode     String?           @unique // Every user gets one at signup, shared to invite others
+  coinsBalance     Int               @default(0) // FreshBhoj Coins
+  referredById     String? // Set once, the first time this user redeems someone else's code
+  referredBy       User?             @relation("Referrals", fields: [referredById], references: [id], onDelete: SetNull)
+  referrals        User[]            @relation("Referrals")
+  coinTransactions CoinTransaction[]
+
   // Relations
   refreshTokens RefreshToken[]
   otpLogs       OtpLog[]
@@ -80,6 +93,22 @@ model User {
   notificationPreference NotificationPreference?
 
   @@map("users")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// REFERRALS / FRESHBHOJ COINS
+// ─────────────────────────────────────────────────────────────────────────────
+
+model CoinTransaction {
+  id        String                @id @default(uuid())
+  userId    String
+  user      User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  amount    Int // Always positive for now — coins are earn-only until spend is built
+  reason    CoinTransactionReason
+  createdAt DateTime              @default(now())
+
+  @@index([userId])
+  @@map("coin_transactions")
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

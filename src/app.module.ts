@@ -43,6 +43,7 @@ import { KitchenDashboardModule } from './modules/kitchen/portal/dashboard/kitch
 // ── Platform ────────────────────────────────────────────────────────────────
 import { CouponsModule } from './modules/platform/coupons/coupons.module';
 import { SupportModule } from './modules/platform/support/support.module';
+import { ReferralModule } from './modules/platform/referral/referral.module';
 import { WebWaitlistModule } from './modules/platform/web-waitlist/web-waitlist.module';
 import appConfig from './config/app.config';
 import jwtConfig from './config/jwt.config';
@@ -83,6 +84,7 @@ import twilioConfig from './config/twilio.config';
     WishlistModule,
     PaymentMethodsModule,
     SupportModule,
+    ReferralModule,
     // HomeModule aggregates the modules above, so it is registered last.
     HomeModule,
 

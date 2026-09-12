@@ -17,6 +17,7 @@
     "db:migrate:prod": "prisma migrate deploy",
     "db:studio": "prisma studio",
     "db:seed": "ts-node -r tsconfig-paths/register prisma/seed.ts",
+    "backfill:referral-codes": "ts-node -r tsconfig-paths/register scripts/backfill-referral-codes.ts",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
     "format": "prettier --write \"src/**/*.ts\"",
     "openapi:check": "ts-node -r tsconfig-paths/register scripts/check-openapi.ts",
