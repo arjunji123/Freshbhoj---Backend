@@ -12,12 +12,14 @@ import {
   KitchenAccount,
   KitchenAccountStatus,
   KitchenOnboardingStep,
+  KitchenStatus,
   OtpPurpose,
 } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { SmsService } from '../customer-auth/sms.service';
 import { normalizePhone } from '../../../common/utils/phone';
+import { getReviewerOtp } from '../../../common/utils/reviewer-phones';
 
 export interface KitchenTokenPair {
   accessToken: string;
@@ -69,7 +71,8 @@ export class KitchenAuthService {
       );
     }
 
-    const otp = isDevMode ? '123456' : this.generateOtp(6);
+    const reviewerOtp = getReviewerOtp(phone, this.configService.get<string>('app.otp.reviewerPhones'));
+    const otp = reviewerOtp ?? (isDevMode ? '123456' : this.generateOtp(6));
     const hashedOtp = await bcrypt.hash(otp, 10);
 
     // Partner OTPs are logged under VERIFY_PHONE so they cannot be replayed
@@ -83,7 +86,11 @@ export class KitchenAuthService {
       },
     });
 
-    await this.smsService.sendOtp(phone, otp);
+    // Skip the real SMS for a whitelisted reviewer/demo number — they already
+    // know the fixed code from the store-listing instructions.
+    if (!reviewerOtp) {
+      await this.smsService.sendOtp(phone, otp);
+    }
 
     return {
       message: 'OTP sent successfully',
@@ -137,6 +144,119 @@ export class KitchenAuthService {
 
     const tokens = await this.generateTokenPair(account);
     return { isNewAccount, account: this.sanitize(account), tokens };
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // ACCOUNT DELETION (self-serve, no human in the loop)
+  // Same OTP-ownership-proof trust level as logging in — works from the app
+  // (already-known phone) or from the public web page (typed fresh), and
+  // needs no prior session.
+  // ──────────────────────────────────────────────────────────────────────────
+
+  async requestAccountDeletion(rawPhone: string) {
+    const phone = normalizePhone(rawPhone);
+    const isDevMode = this.configService.get<boolean>('app.otp.devMode', true);
+    const expiryMinutes = this.configService.get<number>('app.otp.expiryMinutes', 10);
+
+    const recentCount = await this.prisma.otpLog.count({
+      where: {
+        phone,
+        purpose: OtpPurpose.ACCOUNT_DELETION,
+        createdAt: { gt: new Date(Date.now() - 60 * 60 * 1000) },
+      },
+    });
+    if (recentCount >= this.SMS_RATE_LIMIT) {
+      throw new HttpException(
+        'Too many requests. Please wait before trying again.',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
+    const reviewerOtp = getReviewerOtp(phone, this.configService.get<string>('app.otp.reviewerPhones'));
+    const otp = reviewerOtp ?? (isDevMode ? '123456' : this.generateOtp(6));
+    const hashedOtp = await bcrypt.hash(otp, 10);
+
+    // Deliberately doesn't reveal whether a kitchen account exists for this
+    // number — same OTP-request motions either way.
+    await this.prisma.otpLog.create({
+      data: {
+        phone,
+        otp: hashedOtp,
+        purpose: OtpPurpose.ACCOUNT_DELETION,
+        expiresAt: new Date(Date.now() + expiryMinutes * 60_000),
+      },
+    });
+
+    if (!reviewerOtp) {
+      await this.smsService.sendOtp(phone, otp);
+    }
+
+    return {
+      message: 'If this number has a Kitchen Partner account, a verification code has been sent.',
+      expiresInMinutes: expiryMinutes,
+      ...(isDevMode && { devOtp: otp }),
+    };
+  }
+
+  async confirmAccountDeletion(rawPhone: string, otp: string): Promise<{ message: string }> {
+    const phone = normalizePhone(rawPhone);
+    const otpLog = await this.prisma.otpLog.findFirst({
+      where: { phone, purpose: OtpPurpose.ACCOUNT_DELETION, isUsed: false, expiresAt: { gt: new Date() } },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!otpLog) {
+      throw new BadRequestException('Code expired or not found. Please request a new one.');
+    }
+    if (!(await bcrypt.compare(otp, otpLog.otp))) {
+      throw new UnauthorizedException('Invalid code. Please try again.');
+    }
+
+    await this.prisma.otpLog.update({ where: { id: otpLog.id }, data: { isUsed: true } });
+
+    const account = await this.prisma.kitchenAccount.findUnique({
+      where: { phone },
+      include: { kitchen: true },
+    });
+
+    // Same "don't reveal whether an account existed" principle as the
+    // request step — a phone with no account still reports success.
+    if (account && account.status !== KitchenAccountStatus.DELETED) {
+      await this.prisma.$transaction([
+        // Sensitive verification documents and bank details are deleted
+        // outright, not just unlinked.
+        this.prisma.kitchenDocument.deleteMany({ where: { accountId: account.id } }),
+        this.prisma.kitchenBankAccount.deleteMany({ where: { accountId: account.id } }),
+        this.prisma.kitchenRefreshToken.deleteMany({ where: { accountId: account.id } }),
+        this.prisma.kitchenAccount.update({
+          where: { id: account.id },
+          data: {
+            // `phone`/`email` stay unique but are scrubbed — frees them up
+            // and makes the account unreachable via OTP forever.
+            phone: `deleted:${account.id}`,
+            email: null,
+            ownerName: null,
+            fcmToken: null,
+            isPhoneVerified: false,
+            status: KitchenAccountStatus.DELETED,
+          },
+        }),
+        // The storefront (if any) is paused, not erased — past orders,
+        // reviews and payouts need it to stay resolvable. Its own contact
+        // phone is scrubbed since that's the owner's personal number too.
+        ...(account.kitchen
+          ? [
+              this.prisma.kitchen.update({
+                where: { id: account.kitchen.id },
+                data: { status: KitchenStatus.SUSPENDED, isAcceptingOrders: false, contactPhone: null },
+              }),
+            ]
+          : []),
+      ]);
+
+      this.logger.log(`Kitchen partner account deleted (self-serve): ${account.id}`);
+    }
+
+    return { message: 'Your Kitchen Partner account and personal data have been deleted.' };
   }
 
   // ──────────────────────────────────────────────────────────────────────────

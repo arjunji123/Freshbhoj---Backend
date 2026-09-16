@@ -12,5 +12,7 @@ export default registerAs('app', () => ({
     maxAttempts: parseInt(process.env.OTP_MAX_ATTEMPTS, 10) || 5,
     length: parseInt(process.env.OTP_LENGTH, 10) || 6,
     devMode: process.env.OTP_DEV_MODE === 'true',
+    /** Fixed-OTP numbers for app-store reviewers — see common/utils/reviewer-phones.ts. */
+    reviewerPhones: process.env.REVIEWER_TEST_PHONES,
   },
 }));

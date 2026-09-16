@@ -1,0 +1,5 @@
+-- AlterEnum
+ALTER TYPE "OtpPurpose" ADD VALUE 'ACCOUNT_DELETION';
+
+-- AlterEnum
+ALTER TYPE "UserStatus" ADD VALUE 'DELETED';

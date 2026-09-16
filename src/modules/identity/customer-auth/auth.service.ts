@@ -12,10 +12,11 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { RedisService } from '../../../redis/redis.service';
 import { SmsService } from './sms.service';
 import { ReferralService } from '../../platform/referral/referral.service';
-import { User, OtpPurpose } from '@prisma/client';
+import { User, OtpPurpose, UserStatus } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { v4 as uuidv4 } from 'uuid';
 import { normalizePhone } from '../../../common/utils/phone';
+import { getReviewerOtp } from '../../../common/utils/reviewer-phones';
 
 export interface TokenPair {
   accessToken: string;
@@ -79,8 +80,11 @@ export class AuthService {
     const otpLength = this.configService.get<number>('app.otp.length', 6);
     const expiryMinutes = this.configService.get<number>('app.otp.expiryMinutes', 10);
 
-    // Generate OTP
-    const otp = isDevMode ? '123456' : this.generateOtp(otpLength);
+    // A whitelisted app-store-reviewer number always gets the same fixed OTP,
+    // so reviewers don't need real SMS access — every other number is
+    // unaffected and still gets a real, random, SMS-delivered OTP.
+    const reviewerOtp = getReviewerOtp(phone, this.configService.get<string>('app.otp.reviewerPhones'));
+    const otp = reviewerOtp ?? (isDevMode ? '123456' : this.generateOtp(otpLength));
 
     // Hash OTP before storing
     const hashedOtp = await bcrypt.hash(otp, 10);
@@ -101,8 +105,10 @@ export class AuthService {
       },
     });
 
-    // Send SMS
-    await this.smsService.sendOtp(phone, otp);
+    // Send SMS — skip for a reviewer number, they already know the fixed code.
+    if (!reviewerOtp) {
+      await this.smsService.sendOtp(phone, otp);
+    }
 
     const result: OtpSendResult = {
       message: 'OTP sent successfully',
@@ -130,6 +136,149 @@ export class AuthService {
       select: { id: true },
     });
     return { accountType: kitchenAccount ? 'KITCHEN' : 'CUSTOMER' };
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // ACCOUNT DELETION (self-serve, no human in the loop)
+  // Powers the public /delete-account web page required by Play Store's
+  // "Sign in details" data-safety declaration. Proving phone ownership via
+  // OTP is the same trust level as logging in, so this needs no prior
+  // session/token — a user can request deletion even if signed out.
+  // ──────────────────────────────────────────────────────────────────────────
+
+  async requestAccountDeletion(rawPhone: string): Promise<OtpSendResult> {
+    const phone = normalizePhone(rawPhone);
+
+    const allowed = await this.redis.checkRateLimit(
+      `delete-otp:${phone}`,
+      this.SMS_RATE_LIMIT,
+      this.SMS_RATE_WINDOW_SECONDS,
+    );
+    if (!allowed) {
+      throw new HttpException(
+        'Too many requests. Please wait before trying again.',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
+    const isDevMode = this.configService.get<boolean>('app.otp.devMode', true);
+    const otpLength = this.configService.get<number>('app.otp.length', 6);
+    const expiryMinutes = this.configService.get<number>('app.otp.expiryMinutes', 10);
+
+    const reviewerOtp = getReviewerOtp(phone, this.configService.get<string>('app.otp.reviewerPhones'));
+    const otp = reviewerOtp ?? (isDevMode ? '123456' : this.generateOtp(otpLength));
+    const hashedOtp = await bcrypt.hash(otp, 10);
+    const ttlSeconds = expiryMinutes * 60;
+
+    // Deliberately doesn't reveal whether an account exists for this number —
+    // same OTP-request motions either way, so the response can't be used to
+    // enumerate real accounts.
+    const user = await this.prisma.user.findUnique({ where: { phone } });
+    await this.prisma.otpLog.create({
+      data: {
+        phone,
+        otp: hashedOtp,
+        purpose: OtpPurpose.ACCOUNT_DELETION,
+        expiresAt: new Date(Date.now() + ttlSeconds * 1000),
+        userId: user?.id ?? null,
+      },
+    });
+
+    if (!reviewerOtp) {
+      await this.smsService.sendOtp(phone, otp);
+    }
+
+    const result: OtpSendResult = {
+      message: 'If this number has a FreshBhoj account, a verification code has been sent.',
+      expiresInMinutes: expiryMinutes,
+    };
+    if (isDevMode) result.devOtp = otp;
+    return result;
+  }
+
+  async confirmAccountDeletion(rawPhone: string, otp: string): Promise<{ message: string }> {
+    const phone = normalizePhone(rawPhone);
+    const maxAttempts = this.configService.get<number>('app.otp.maxAttempts', 5);
+    const expiryMinutes = this.configService.get<number>('app.otp.expiryMinutes', 10);
+    const ttlSeconds = expiryMinutes * 60;
+
+    const attempts = await this.redis.incrementOtpAttempts(`delete-otp:${phone}`, ttlSeconds);
+    if (attempts > maxAttempts) {
+      throw new HttpException(
+        'Too many incorrect attempts. Please request a new code.',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
+    const otpLog = await this.prisma.otpLog.findFirst({
+      where: { phone, purpose: OtpPurpose.ACCOUNT_DELETION, isUsed: false, expiresAt: { gt: new Date() } },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!otpLog) {
+      throw new BadRequestException('Code expired or not found. Please request a new one.');
+    }
+    if (!(await bcrypt.compare(otp, otpLog.otp))) {
+      throw new UnauthorizedException(`Invalid code. ${maxAttempts - attempts} attempts remaining.`);
+    }
+
+    await this.prisma.otpLog.update({ where: { id: otpLog.id }, data: { isUsed: true } });
+
+    const user = await this.prisma.user.findUnique({ where: { phone } });
+
+    // Same "don't reveal whether an account existed" principle as the request
+    // step — a phone with no account (or already deleted) still reports success.
+    if (user && user.status !== UserStatus.DELETED) {
+      // A legacy kitchen-owner link needs a human to reassign/close the
+      // listing first — never silently scrub the account under it.
+      const ownedKitchenCount = await this.prisma.kitchen.count({ where: { ownerId: user.id } });
+      if (ownedKitchenCount > 0) {
+        throw new BadRequestException(
+          'This account owns a kitchen listing. Please contact support to close it before deleting your account.',
+        );
+      }
+
+      await this.prisma.$transaction([
+        this.prisma.address.deleteMany({ where: { userId: user.id } }),
+        this.prisma.savedCard.deleteMany({ where: { userId: user.id } }),
+        this.prisma.favorite.deleteMany({ where: { userId: user.id } }),
+        this.prisma.kitchenFollow.deleteMany({ where: { userId: user.id } }),
+        this.prisma.reelLike.deleteMany({ where: { userId: user.id } }),
+        this.prisma.reelSave.deleteMany({ where: { userId: user.id } }),
+        this.prisma.kitchenStoryLike.deleteMany({ where: { userId: user.id } }),
+        this.prisma.kitchenStoryView.deleteMany({ where: { userId: user.id } }),
+        this.prisma.notificationPreference.deleteMany({ where: { userId: user.id } }),
+        this.prisma.refreshToken.deleteMany({ where: { userId: user.id } }),
+        this.prisma.cart.deleteMany({ where: { userId: user.id } }),
+        this.prisma.otpLog.deleteMany({ where: { phone } }),
+        this.prisma.user.update({
+          where: { id: user.id },
+          data: {
+            // `phone` stays unique but is scrubbed — frees the real number up
+            // for reuse and makes the account unreachable via OTP forever.
+            phone: `deleted:${user.id}`,
+            fullName: null,
+            email: null,
+            profileImage: null,
+            address: null,
+            city: null,
+            state: null,
+            pincode: null,
+            latitude: null,
+            longitude: null,
+            fcmToken: null,
+            isPhoneVerified: false,
+            status: UserStatus.DELETED,
+          },
+        }),
+      ]);
+
+      // Orders/reviews/coin transactions are deliberately kept (now under an
+      // anonymized account) — kitchens and accounting have a legitimate
+      // retention need for completed-transaction records.
+      this.logger.log(`Account deleted (self-serve): ${user.id}`);
+    }
+
+    return { message: 'Your account and personal data have been deleted.' };
   }
 
   // ──────────────────────────────────────────────────────────────────────────

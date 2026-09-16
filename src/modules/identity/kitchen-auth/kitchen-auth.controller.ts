@@ -79,6 +79,40 @@ export class KitchenAuthController {
     };
   }
 
+  @Public()
+  @Post('account-deletion/request')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Request Kitchen Partner account deletion — sends an OTP to confirm',
+    description:
+      'Powers the public account-deletion page and the app\'s in-account delete flow. No prior login required — OTP ownership proof is enough.',
+  })
+  @ApiEnvelope(KitchenSendOtpResultDto)
+  @ApiEnvelopeError(429, 'Too many requests — wait before retrying')
+  async requestAccountDeletion(@Body() dto: KitchenSendOtpDto) {
+    const result = await this.kitchenAuthService.requestAccountDeletion(dto.phone);
+    return {
+      message: result.message,
+      data: { expiresInMinutes: result.expiresInMinutes, ...(result.devOtp && { devOtp: result.devOtp }) },
+    };
+  }
+
+  @Public()
+  @Post('account-deletion/confirm')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Confirm Kitchen Partner account deletion with the OTP',
+    description:
+      'Scrubs the account\'s personal data (name, email, verification documents, bank details) and revokes every session. If the partner has a live storefront, it is paused (not erased) since past orders, reviews and payouts need it to stay resolvable.',
+  })
+  @ApiEnvelopeNull({ description: 'Account deleted (or no account existed for this number)' })
+  @ApiEnvelopeError(400, 'Code expired or not found')
+  @ApiEnvelopeError(401, 'Incorrect code')
+  async confirmAccountDeletion(@Body() dto: KitchenVerifyOtpDto) {
+    const result = await this.kitchenAuthService.confirmAccountDeletion(dto.phone, dto.otp);
+    return { message: result.message, data: null };
+  }
+
   @Post('logout')
   @HttpCode(HttpStatus.OK)
   @UseGuards(KitchenAuthGuard)

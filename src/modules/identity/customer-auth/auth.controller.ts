@@ -61,6 +61,54 @@ export class AuthController {
   }
 
   // ──────────────────────────────────────────────────────────────────────────
+  // POST /auth/account-deletion/request
+  // Public: Send an OTP to prove ownership before deleting an account
+  // ──────────────────────────────────────────────────────────────────────────
+  @Public()
+  @Post('account-deletion/request')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Request account deletion — sends an OTP to confirm',
+    description:
+      'Powers the public account-deletion page. No prior login required — OTP ownership proof is enough. Always responds the same way whether or not an account exists for the number, to avoid revealing account existence.',
+  })
+  @ApiBody({ type: SendOtpDto })
+  @ApiEnvelope(SendOtpResultDto, { description: 'Code sent (if an account exists)' })
+  @ApiEnvelopeError(429, 'Too many requests — wait before retrying')
+  async requestAccountDeletion(@Body() dto: SendOtpDto) {
+    const result = await this.authService.requestAccountDeletion(dto.phone);
+    return {
+      message: result.message,
+      data: {
+        expiresInMinutes: result.expiresInMinutes,
+        ...(result.devOtp && { devOtp: result.devOtp }),
+      },
+    };
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // POST /auth/account-deletion/confirm
+  // Public: Verify the OTP and permanently delete the account's personal data
+  // ──────────────────────────────────────────────────────────────────────────
+  @Public()
+  @Post('account-deletion/confirm')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Confirm account deletion with the OTP',
+    description:
+      'Scrubs all personal data (name, email, photo, address, saved cards, favorites, follows, likes, notification preferences) and revokes every session. Order/review history is kept, now attached to an anonymized account, for the kitchen partners\' and platform\'s legitimate transaction-record retention needs.',
+  })
+  @ApiBody({ type: VerifyOtpDto })
+  @ApiEnvelopeNull({ description: 'Account deleted (or no account existed for this number)' })
+  @ApiEnvelopeError(400, 'Code expired, not found, or the account owns a kitchen listing')
+  @ApiEnvelopeError(401, 'Incorrect code')
+  @ApiEnvelopeError(429, 'Too many incorrect attempts')
+  async confirmAccountDeletion(@Body() dto: VerifyOtpDto) {
+    const result = await this.authService.confirmAccountDeletion(dto.phone, dto.otp);
+    return { message: result.message, data: null };
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
   // POST /auth/account-type
   // Public: Resolve which OTP flow a phone number belongs to
   // ──────────────────────────────────────────────────────────────────────────

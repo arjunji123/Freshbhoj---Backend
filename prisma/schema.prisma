@@ -25,12 +25,14 @@ enum UserStatus {
   INACTIVE
   BANNED
   PENDING_PROFILE
+  DELETED
 }
 
 enum OtpPurpose {
   LOGIN
   VERIFY_PHONE
   RESET
+  ACCOUNT_DELETION
 }
 
 enum CoinTransactionReason {
@@ -899,6 +901,9 @@ enum KitchenAccountStatus {
   ACTIVE
   REJECTED
   SUSPENDED
+  /// Self-deleted by the partner. The Kitchen storefront (if any) is paused,
+  /// not erased — historical orders/reviews need it to stay resolvable.
+  DELETED
 }
 
 /// Ordered onboarding funnel. `KitchenAccount.onboardingStep` is the furthest
