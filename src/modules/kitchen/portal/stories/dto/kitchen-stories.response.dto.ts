@@ -23,6 +23,18 @@ export class KitchenStoryDto {
   @ApiProperty({ example: 312 })
   viewCount: number;
 
+  @ApiProperty({ example: 24 })
+  likeCount: number;
+
+  @ApiProperty({ example: 6 })
+  shareCount: number;
+
+  @ApiProperty({ example: 3, description: 'Orders placed after tapping through this story\'s linked dish' })
+  orderCount: number;
+
+  @ApiPropertyOptional({ nullable: true, example: 'Special North Indian Thali' })
+  mealName: string | null;
+
   @ApiProperty({ example: true })
   isActive: boolean;
 

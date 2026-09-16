@@ -97,7 +97,13 @@ export class PriceBreakdownDto {
   @ApiProperty({ example: 20, description: '5% GST on the post-discount subtotal' })
   taxes: number;
 
-  @ApiProperty({ example: 150 })
+  @ApiProperty({ example: 150, description: 'From the applied coupon, if any' })
+  couponDiscount: number;
+
+  @ApiProperty({ example: 50, description: 'From redeemed FreshBhoj Coins, if any' })
+  coinDiscount: number;
+
+  @ApiProperty({ example: 200, description: 'couponDiscount + coinDiscount' })
   discount: number;
 
   @ApiProperty({ example: 428 })
@@ -130,6 +136,33 @@ export class CartCouponDto {
     nullable: true,
     example: 'Add ₹41 more to use this coupon',
     description: 'Set when a previously-applied coupon stopped qualifying',
+  })
+  invalidReason: string | null;
+}
+
+export class CartCoinsDto {
+  @ApiProperty({ example: 250, description: "The user's total FreshBhoj Coins balance" })
+  balance: number;
+
+  @ApiProperty({ example: 200, description: 'Coins actually redeemed on this cart right now' })
+  applied: number;
+
+  @ApiProperty({ example: 200, description: '1 coin = ₹1' })
+  discount: number;
+
+  @ApiProperty({ example: 200, description: 'Most this cart could redeem if fully applied' })
+  maxRedeemable: number;
+
+  @ApiProperty({ example: 1000, description: 'Items subtotal required before coins can be used' })
+  minOrderValue: number;
+
+  @ApiProperty({ example: 200, description: 'Coin cap per order' })
+  maxPerOrder: number;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    example: 'Add items worth ₹120 more to use your coins',
+    description: 'Set when a previously-applied redemption stopped qualifying in full',
   })
   invalidReason: string | null;
 }
@@ -168,6 +201,9 @@ export class CartDto {
 
   @ApiProperty({ type: CartCouponDto })
   coupon: CartCouponDto;
+
+  @ApiProperty({ type: CartCoinsDto })
+  coins: CartCoinsDto;
 
   @ApiProperty({ type: PriceBreakdownDto })
   pricing: PriceBreakdownDto;

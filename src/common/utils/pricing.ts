@@ -14,12 +14,19 @@ export const PRICING = {
   TAX_RATE: 0.05,
   /** Minimum order value we accept. */
   MIN_ORDER_VALUE: 99,
+  /** Items subtotal must be at least this much before coins can be redeemed. */
+  COINS_MIN_ORDER_VALUE: 1000,
+  /** Most coins a single order can redeem. 1 coin = ₹1, so this is also the max coin discount. */
+  MAX_REDEEMABLE_COINS: 200,
 } as const;
 
 export interface PriceBreakdown {
   itemsTotal: number;
   deliveryFee: number;
   taxes: number;
+  couponDiscount: number;
+  coinDiscount: number;
+  /** couponDiscount + coinDiscount, clamped to itemsTotal. */
   discount: number;
   totalAmount: number;
   freeDeliveryApplied: boolean;
@@ -36,12 +43,20 @@ export function calculateTaxes(taxableAmount: number): number {
 }
 
 /**
- * Discount applies to the items subtotal only (not to delivery or tax),
- * and tax is charged on the post-discount subtotal.
+ * Discounts apply to the items subtotal only (not to delivery or tax),
+ * and tax is charged on the post-discount subtotal. The coupon discount is
+ * clamped first, and the coin discount is clamped to whatever's left — so the
+ * two combined can never exceed the subtotal.
  */
-export function buildPriceBreakdown(itemsTotal: number, discount = 0): PriceBreakdown {
+export function buildPriceBreakdown(
+  itemsTotal: number,
+  couponDiscount = 0,
+  coinDiscount = 0,
+): PriceBreakdown {
   const safeItems = Math.max(Math.round(itemsTotal), 0);
-  const safeDiscount = Math.min(Math.max(Math.round(discount), 0), safeItems);
+  const safeCoupon = Math.min(Math.max(Math.round(couponDiscount), 0), safeItems);
+  const safeCoin = Math.min(Math.max(Math.round(coinDiscount), 0), safeItems - safeCoupon);
+  const safeDiscount = safeCoupon + safeCoin;
   const deliveryFee = calculateDeliveryFee(safeItems);
   const taxes = calculateTaxes(safeItems - safeDiscount);
   const totalAmount = safeItems - safeDiscount + deliveryFee + taxes;
@@ -50,6 +65,8 @@ export function buildPriceBreakdown(itemsTotal: number, discount = 0): PriceBrea
     itemsTotal: safeItems,
     deliveryFee,
     taxes,
+    couponDiscount: safeCoupon,
+    coinDiscount: safeCoin,
     discount: safeDiscount,
     totalAmount,
     freeDeliveryApplied: deliveryFee === 0,

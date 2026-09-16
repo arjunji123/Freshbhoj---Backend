@@ -41,3 +41,10 @@ export class PublishStoryDto {
   @Max(60)
   durationSec?: number;
 }
+
+export class UpdateStoryCaptionDto {
+  @ApiProperty({ example: 'Today’s dal, on the stove since 6am — updated!' })
+  @IsString()
+  @MaxLength(150)
+  caption: string;
+}

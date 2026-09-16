@@ -114,6 +114,22 @@ export class AuthService {
   }
 
   // ──────────────────────────────────────────────────────────────────────────
+  // ACCOUNT TYPE DETECTION
+  // Lets the app's single login screen route to the kitchen or customer OTP
+  // flow before sending any OTP. A kitchen account existing for the phone
+  // always wins — a kitchen owner never sees the customer flow by accident.
+  // ──────────────────────────────────────────────────────────────────────────
+
+  async getAccountType(rawPhone: string): Promise<{ accountType: 'KITCHEN' | 'CUSTOMER' }> {
+    const phone = this.normalizePhone(rawPhone);
+    const kitchenAccount = await this.prisma.kitchenAccount.findUnique({
+      where: { phone },
+      select: { id: true },
+    });
+    return { accountType: kitchenAccount ? 'KITCHEN' : 'CUSTOMER' };
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
   // VERIFY OTP
   // ──────────────────────────────────────────────────────────────────────────
 
@@ -346,5 +362,11 @@ export class AuthService {
   private sanitizeUser(user: User): Partial<User> {
     const { ...rest } = user;
     return rest;
+  }
+
+  /** Defensive E.164-ish normalization — neither OTP flow guarantees a `+91` prefix on input. */
+  private normalizePhone(phone: string): string {
+    const digits = phone.replace(/\D/g, '');
+    return `+91${digits.slice(-10)}`;
   }
 }

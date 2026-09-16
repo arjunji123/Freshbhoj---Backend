@@ -2,12 +2,8 @@ import { Injectable } from '@nestjs/common';
 import { GoalTag, MealSlot } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { CatalogService } from '../catalog/catalog.service';
-import { KitchensService } from '../kitchens/kitchens.service';
-import { MealsService } from '../meals/meals.service';
 import { OrdersService } from '../../customer/orders/orders.service';
 import { ReelsService } from '../reels/reels.service';
-import { MealSortBy } from '../meals/dto/meals.dto';
-import { KitchenSortBy } from '../kitchens/dto/kitchens.dto';
 import { ReelFeedType } from '../reels/dto/reels.dto';
 
 @Injectable()
@@ -15,8 +11,6 @@ export class HomeService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly catalogService: CatalogService,
-    private readonly kitchensService: KitchensService,
-    private readonly mealsService: MealsService,
     private readonly ordersService: OrdersService,
     private readonly reelsService: ReelsService,
   ) {}
@@ -27,24 +21,11 @@ export class HomeService {
    * payload stays a fixed size no matter how far the user scrolls.
    */
   async getFeed(userId?: string) {
-    const [
-      categories,
-      featuredKitchens,
-      recommendedMeals,
-      trendingReels,
-      activeOrders,
-    ] = await Promise.all([
+    // Newly-joined kitchens and the recommended meal feed each have their own
+    // dedicated queries on the client (`useKitchens`, `useMealFeed`), so this
+    // aggregated payload only computes what nothing else already fetches.
+    const [categories, trendingReels, activeOrders] = await Promise.all([
       this.catalogService.getCategories(),
-      this.kitchensService.findAll({
-        page: 1,
-        limit: 10,
-        verifiedOnly: true,
-        sortBy: KitchenSortBy.RECOMMENDED,
-      }),
-      this.mealsService.findAll(
-        { page: 1, limit: 10, sortBy: MealSortBy.RECOMMENDED },
-        userId,
-      ),
       this.reelsService.getFeed({ page: 1, limit: 6, feed: ReelFeedType.TRENDING }, userId),
       userId ? this.ordersService.findActive(userId) : Promise.resolve([]),
     ]);
@@ -55,8 +36,6 @@ export class HomeService {
       currentSlot: this.currentSlot(),
       goalTags: this.catalogService.getGoalTags(),
       categories,
-      featuredKitchens: featuredKitchens.items,
-      recommendedMeals: recommendedMeals.items,
       trendingReels: trendingReels.items,
       activeOrders,
     };

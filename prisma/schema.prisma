@@ -36,6 +36,7 @@ enum OtpPurpose {
 enum CoinTransactionReason {
   REFERRAL_REFERRER_BONUS
   REFERRAL_REFEREE_BONUS
+  ORDER_REDEMPTION
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -83,12 +84,14 @@ model User {
   cart                   Cart?
   orders                 Order[]
   reviews                Review[]
+  reviewHelpfulVotes     ReviewHelpfulVote[]
   favorites              Favorite[]
   kitchenFollows         KitchenFollow[]
   reelLikes              ReelLike[]
   reelSaves              ReelSave[]
   savedCards             SavedCard[]
   storyViews             KitchenStoryView[]
+  storyLikes             KitchenStoryLike[]
   ownedKitchens          Kitchen[]               @relation("KitchenOwner")
   notificationPreference NotificationPreference?
 
@@ -103,7 +106,7 @@ model CoinTransaction {
   id        String                @id @default(uuid())
   userId    String
   user      User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
-  amount    Int // Always positive for now — coins are earn-only until spend is built
+  amount    Int // Positive for earnings, negative for order redemptions
   reason    CoinTransactionReason
   createdAt DateTime              @default(now())
 
@@ -568,12 +571,18 @@ model Address {
 // ─────────────────────────────────────────────────────────────────────────────
 
 model Cart {
-  id         String   @id @default(uuid())
-  userId     String   @unique
-  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  couponCode String?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  id            String   @id @default(uuid())
+  userId        String   @unique
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  couponCode    String?
+  coinsToRedeem Int      @default(0)
+  /// Set when the most recent add-to-cart came from tapping a shoppable Kitchen
+  /// Story — copied onto the Order at placement time for attribution. Plain
+  /// string, not a hard FK, same as couponCode: the story can expire/be
+  /// deleted without orphaning the cart.
+  sourceStoryId String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   items CartItem[]
 
@@ -657,11 +666,15 @@ model Order {
 
   // ── Money (whole rupees) ───────────────────────────────────────────────
   itemsTotal  Int
-  deliveryFee Int     @default(0)
-  taxes       Int     @default(0)
-  discount    Int     @default(0)
-  totalAmount Int
-  couponCode  String?
+  deliveryFee Int @default(0)
+  taxes       Int @default(0)
+  /// Combined coupon + coin discount. The coin share is `coinsRedeemed` (1 coin = ₹1).
+  discount      Int     @default(0)
+  totalAmount   Int
+  couponCode    String?
+  coinsRedeemed Int     @default(0)
+  /// Frozen from Cart.sourceStoryId at placement — powers "orders from this story" on the partner dashboard.
+  sourceStoryId String?
 
   paymentMethod PaymentMethod @default(UPI)
   paymentStatus PaymentStatus @default(PENDING)
@@ -751,10 +764,27 @@ model Review {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  helpfulVotes ReviewHelpfulVote[]
+
   @@unique([orderId, userId])
   @@index([kitchenId, createdAt])
   @@index([mealId, createdAt])
   @@map("reviews")
+}
+
+/// One row per (review, user) — lets a "helpful" tap be a real toggle instead
+/// of an unbounded counter anyone can spam.
+model ReviewHelpfulVote {
+  id        String   @id @default(uuid())
+  reviewId  String
+  review    Review   @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([reviewId, userId])
+  @@index([userId])
+  @@map("review_helpful_votes")
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1021,16 +1051,33 @@ model KitchenStory {
   city        String
   durationSec Int      @default(15)
   viewCount   Int      @default(0)
+  likeCount   Int      @default(0)
+  shareCount  Int      @default(0)
   isActive    Boolean  @default(true)
   /// Stories disappear after this instant. Set to +24h on publish.
   expiresAt   DateTime
   createdAt   DateTime @default(now())
 
   views KitchenStoryView[]
+  likes KitchenStoryLike[]
 
   @@index([city, isActive, expiresAt])
   @@index([kitchenId, expiresAt])
   @@map("kitchen_stories")
+}
+
+/// One row per (story, customer) like — mirrors ReviewHelpfulVote's toggle shape.
+model KitchenStoryLike {
+  id        String       @id @default(uuid())
+  storyId   String
+  story     KitchenStory @relation(fields: [storyId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime     @default(now())
+
+  @@unique([storyId, userId])
+  @@index([userId])
+  @@map("kitchen_story_likes")
 }
 
 /// Powers the seen/unseen ring around a story avatar.

@@ -37,6 +37,17 @@ export class VerifyOtpDto {
 }
 
 /**
+ * Detect whether a phone number belongs to a kitchen-partner or customer account
+ */
+export class AccountTypeDto {
+  @ApiProperty({ example: '+919876543210', description: 'Valid Indian mobile number with country code' })
+  @IsString()
+  @IsNotEmpty()
+  @IsMobilePhone('en-IN', {}, { message: 'Please enter a valid Indian mobile number' })
+  phone: string;
+}
+
+/**
  * Refresh access token using refresh token
  */
 export class RefreshTokenDto {

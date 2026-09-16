@@ -15,13 +15,19 @@ import {
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { KitchenAccount } from '@prisma/client';
 import { KitchenMenuService } from './kitchen-menu.service';
+import { NutritionAiService } from './nutrition-ai.service';
 import {
+  AnalyzeMealDto,
   MenuQueryDto,
   SetMealAvailabilityDto,
   UpdateMealDto,
   UpsertMealDto,
 } from './dto/kitchen-menu.dto';
-import { MealAvailabilityDto, MealMutationResultDto } from './dto/kitchen-menu.response.dto';
+import {
+  MealAvailabilityDto,
+  MealMutationResultDto,
+  NutritionAnalysisResultDto,
+} from './dto/kitchen-menu.response.dto';
 import { MealDetailDto } from '../../../discovery/meals/dto/meals.response.dto';
 import { KitchenAuthGuard } from '../../../identity/kitchen-auth/guards/kitchen-auth.guard';
 import { CurrentKitchenAccount } from '../../../identity/kitchen-auth/decorators/current-kitchen.decorator';
@@ -43,7 +49,24 @@ import { KitchenScope } from '../../../../common/decorators/kitchen-scope.decora
 @KitchenScope()
 @Controller('partner/menu')
 export class KitchenMenuController {
-  constructor(private readonly kitchenMenuService: KitchenMenuService) {}
+  constructor(
+    private readonly kitchenMenuService: KitchenMenuService,
+    private readonly nutritionAiService: NutritionAiService,
+  ) {}
+
+  @Post('analyze')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'AI-estimate nutrition, health score, and junk-food flag for a dish',
+    description:
+      'Give it whatever you have typed so far (name required, description/ingredients help accuracy). ' +
+      'Nothing is saved — review the numbers, edit if you disagree, then create/update the dish as usual.',
+  })
+  @ApiEnvelope(NutritionAnalysisResultDto)
+  @ApiEnvelopeError(503, 'AI analysis is not configured, or temporarily unavailable')
+  async analyze(@Body() dto: AnalyzeMealDto) {
+    return { message: 'Analysis complete', data: await this.nutritionAiService.analyze(dto) };
+  }
 
   @Get()
   @ApiOperation({ summary: 'Your full menu, including unpublished dishes' })

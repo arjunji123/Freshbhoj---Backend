@@ -10,12 +10,13 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiBody } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
-import { SendOtpDto, VerifyOtpDto, RefreshTokenDto } from './dto/auth.dto';
+import { SendOtpDto, VerifyOtpDto, RefreshTokenDto, AccountTypeDto } from './dto/auth.dto';
 import { Public } from '../../../common/decorators/public.decorator';
 import { CurrentUser } from '../../../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { User } from '@prisma/client';
 import {
+  AccountTypeResultDto,
   SendOtpResultDto,
   TokenPairDto,
   UserDto,
@@ -57,6 +58,26 @@ export class AuthController {
         ...(result.devOtp && { devOtp: result.devOtp }),
       },
     };
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // POST /auth/account-type
+  // Public: Resolve which OTP flow a phone number belongs to
+  // ──────────────────────────────────────────────────────────────────────────
+  @Public()
+  @Post('account-type')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Detect whether a phone number is a kitchen-partner or customer account',
+    description:
+      'Call this before sending any OTP from a single, combined phone-entry screen. A phone with an existing kitchen-partner account (any status) resolves to KITCHEN; everything else — including brand-new numbers — resolves to CUSTOMER.',
+  })
+  @ApiBody({ type: AccountTypeDto })
+  @ApiEnvelope(AccountTypeResultDto, { description: 'Account type resolved' })
+  @ApiEnvelopeError(400, 'Not a valid Indian mobile number')
+  async getAccountType(@Body() dto: AccountTypeDto) {
+    const result = await this.authService.getAccountType(dto.phone);
+    return { message: 'Account type resolved', data: result };
   }
 
   // ──────────────────────────────────────────────────────────────────────────

@@ -39,6 +39,22 @@ export class UploadService {
   }
 
   // ──────────────────────────────────────────────────────────────────────────
+  // Upload Kitchen Partner Media (menu photos, story clips, documents, branding)
+  // ──────────────────────────────────────────────────────────────────────────
+
+  async uploadForKitchen(
+    file: Express.Multer.File,
+    accountId: string,
+    purpose: string,
+  ): Promise<string> {
+    const ext = path.extname(file.originalname).toLowerCase();
+    const folder = purpose.toLowerCase().replace(/_/g, '-');
+    const key = `kitchens/${accountId}/${folder}/${uuidv4()}${ext}`;
+
+    return this.uploadFile(file.buffer, key, file.mimetype);
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
   // Generic Upload
   // ──────────────────────────────────────────────────────────────────────────
 

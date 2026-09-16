@@ -63,6 +63,12 @@ export class StoryItemDto {
   @ApiProperty({ example: 312, description: 'Unique viewers, not replays' })
   viewCount: number;
 
+  @ApiProperty({ example: 24 })
+  likeCount: number;
+
+  @ApiProperty({ example: 6 })
+  shareCount: number;
+
   @ApiProperty({ example: '2026-09-03T04:30:00.000Z' })
   publishedAt: string;
 
@@ -71,6 +77,9 @@ export class StoryItemDto {
 
   @ApiProperty({ example: false, description: 'Personalised; always false when signed out' })
   isSeen: boolean;
+
+  @ApiProperty({ example: false, description: 'Personalised; always false when signed out' })
+  isLiked: boolean;
 
   @ApiPropertyOptional({ type: StoryMealRefDto, nullable: true, description: 'Shoppable link' })
   meal: StoryMealRefDto | null;
@@ -102,4 +111,23 @@ export class StorySeenDto {
 
   @ApiProperty({ example: true, description: 'False when this viewer had already been counted' })
   recorded: boolean;
+}
+
+export class StoryLikeDto {
+  @ApiProperty({ example: '4e5f6a7b-8c9d-4e0f-8a1b-2c3d4e5f6a7b' })
+  storyId: string;
+
+  @ApiProperty({ example: true })
+  isLiked: boolean;
+
+  @ApiProperty({ example: 25 })
+  likeCount: number;
+}
+
+export class StoryShareDto {
+  @ApiProperty({ example: '4e5f6a7b-8c9d-4e0f-8a1b-2c3d4e5f6a7b' })
+  storyId: string;
+
+  @ApiProperty({ example: 7 })
+  shareCount: number;
 }

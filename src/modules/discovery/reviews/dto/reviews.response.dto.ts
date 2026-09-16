@@ -44,6 +44,9 @@ export class ReviewDto {
   @ApiProperty({ example: 24 })
   likeCount: number;
 
+  @ApiProperty({ example: false, description: 'Whether the signed-in user has marked this helpful' })
+  isHelpful: boolean;
+
   @ApiProperty({ example: '2026-09-01T10:14:00.000Z' })
   createdAt: string;
 
@@ -121,4 +124,7 @@ export class ReviewHelpfulDto {
 
   @ApiProperty({ example: 25 })
   likeCount: number;
+
+  @ApiProperty({ example: true })
+  isHelpful: boolean;
 }

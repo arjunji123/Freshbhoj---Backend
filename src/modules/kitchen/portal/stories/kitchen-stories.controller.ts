@@ -1,8 +1,8 @@
-import { Body, Controller, Delete, Get, Param, ParseUUIDPipe, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, ParseUUIDPipe, Patch, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { KitchenAccount } from '@prisma/client';
 import { KitchenStoriesService } from './kitchen-stories.service';
-import { PublishStoryDto } from './dto/kitchen-stories.dto';
+import { PublishStoryDto, UpdateStoryCaptionDto } from './dto/kitchen-stories.dto';
 import { DeletedStoryDto, KitchenStoryDto } from './dto/kitchen-stories.response.dto';
 import { KitchenAuthGuard } from '../../../identity/kitchen-auth/guards/kitchen-auth.guard';
 import { CurrentKitchenAccount } from '../../../identity/kitchen-auth/decorators/current-kitchen.decorator';
@@ -40,6 +40,22 @@ export class KitchenStoriesController {
     return {
       message: 'Story published',
       data: await this.kitchenStoriesService.publish(account.id, dto),
+    };
+  }
+
+  @Patch(':id')
+  @ApiOperation({ summary: 'Edit a story\'s caption' })
+  @ApiEnvelope(KitchenStoryDto)
+  @ApiEnvelopeError(403, 'This story belongs to another kitchen')
+  @ApiEnvelopeError(404, 'Story not found')
+  async updateCaption(
+    @CurrentKitchenAccount() account: KitchenAccount,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateStoryCaptionDto,
+  ) {
+    return {
+      message: 'Caption updated',
+      data: await this.kitchenStoriesService.updateCaption(account.id, id, dto),
     };
   }
 

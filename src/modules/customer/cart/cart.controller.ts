@@ -102,4 +102,24 @@ export class CartController {
   async removeCoupon(@CurrentUser() user: User) {
     return { message: 'Coupon removed', data: await this.cartService.removeCoupon(user.id) };
   }
+
+  @Post('coins')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Redeem FreshBhoj Coins on this cart',
+    description:
+      'No body — redeems the most the cart currently qualifies for (up to ₹1000 min order, 200 coins max). The 400 message is written for the user.',
+  })
+  @ApiEnvelope(CartDto)
+  @ApiEnvelopeError(400, 'Below the minimum order value for coins, or no coins to redeem')
+  async applyCoins(@CurrentUser() user: User) {
+    return { message: 'Coins applied', data: await this.cartService.applyCoins(user.id) };
+  }
+
+  @Delete('coins')
+  @ApiOperation({ summary: 'Remove the redeemed coins' })
+  @ApiEnvelope(CartDto)
+  async removeCoins(@CurrentUser() user: User) {
+    return { message: 'Coins removed', data: await this.cartService.removeCoins(user.id) };
+  }
 }

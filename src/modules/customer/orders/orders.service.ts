@@ -1,11 +1,13 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
 import {
+  CoinTransactionReason,
   DeliverySlotType,
   OrderStatus,
   PaymentMethod,
@@ -15,6 +17,7 @@ import {
 import { PrismaService } from '../../../prisma/prisma.service';
 import { CartService } from '../cart/cart.service';
 import { CouponsService } from '../../platform/coupons/coupons.service';
+import { ReferralService } from '../../platform/referral/referral.service';
 import { AddressesService } from '../addresses/addresses.service';
 import { buildPriceBreakdown, generateOrderNumber, PRICING } from '../../../common/utils/pricing';
 import { isKitchenOpenNow } from '../../../common/utils/kitchen';
@@ -61,6 +64,7 @@ export class OrdersService {
     private readonly prisma: PrismaService,
     private readonly cartService: CartService,
     private readonly couponsService: CouponsService,
+    private readonly referralService: ReferralService,
     private readonly addressesService: AddressesService,
   ) {}
 
@@ -100,7 +104,8 @@ export class OrdersService {
 
     const cart = await this.cartService.ensureCart(userId);
     const coupon = await this.couponsService.evaluate(cart.couponCode, itemsTotal, userId);
-    const pricing = buildPriceBreakdown(itemsTotal, coupon.discount);
+    const coins = await this.referralService.evaluateRedemption(userId, itemsTotal, cart.coinsToRedeem);
+    const pricing = buildPriceBreakdown(itemsTotal, coupon.discount, coins.discount);
 
     const paymentMethod = dto.paymentMethod ?? PaymentMethod.UPI;
     // COD skips the gateway and goes straight to PLACED; everything else waits
@@ -137,6 +142,8 @@ export class OrdersService {
           discount: pricing.discount,
           totalAmount: pricing.totalAmount,
           couponCode: coupon.valid ? coupon.code : null,
+          coinsRedeemed: coins.redeemed,
+          sourceStoryId: cart.sourceStoryId,
           paymentMethod,
           paymentStatus: isCod ? PaymentStatus.PENDING : PaymentStatus.PROCESSING,
           slotType: dto.slotType ?? DeliverySlotType.NOW,
@@ -171,9 +178,15 @@ export class OrdersService {
 
       if (isCod) {
         await tx.cartItem.deleteMany({ where: { cartId: cart.id } });
-        await tx.cart.update({ where: { id: cart.id }, data: { couponCode: null } });
+        await tx.cart.update({
+          where: { id: cart.id },
+          data: { couponCode: null, coinsToRedeem: 0, sourceStoryId: null },
+        });
         if (coupon.valid && coupon.code) {
           await tx.coupon.updateMany({ where: { code: coupon.code }, data: { usedCount: { increment: 1 } } });
+        }
+        if (coins.redeemed > 0) {
+          await this.debitCoins(tx, userId, coins.redeemed);
         }
         await Promise.all(
           pricedLines.map(({ item }) =>
@@ -221,13 +234,20 @@ export class OrdersService {
       // The cart is only emptied once money has actually moved — a failed
       // payment leaves the customer's cart intact so they can retry.
       await tx.cartItem.deleteMany({ where: { cartId: cart.id } });
-      await tx.cart.update({ where: { id: cart.id }, data: { couponCode: null } });
+      await tx.cart.update({
+        where: { id: cart.id },
+        data: { couponCode: null, coinsToRedeem: 0, sourceStoryId: null },
+      });
 
       if (result.couponCode) {
         await tx.coupon.updateMany({
           where: { code: result.couponCode },
           data: { usedCount: { increment: 1 } },
         });
+      }
+
+      if (result.coinsRedeemed > 0) {
+        await this.debitCoins(tx, userId, result.coinsRedeemed);
       }
 
       await Promise.all(
@@ -490,6 +510,9 @@ export class OrdersService {
         deliveryFee: order.deliveryFee,
         taxes: order.taxes,
         discount: order.discount,
+        couponDiscount: order.discount - order.coinsRedeemed,
+        coinsRedeemed: order.coinsRedeemed,
+        coinDiscount: order.coinsRedeemed,
         totalAmount: order.totalAmount,
         couponCode: order.couponCode,
       },
@@ -567,6 +590,28 @@ export class OrdersService {
       [OrderStatus.CANCELLED]: 'Cancelled',
     };
     return labels[status];
+  }
+
+  /**
+   * Actually spends coins — called once payment is certain (COD placement, or
+   * a successful `confirmPayment`), never at order creation, so a failed or
+   * abandoned payment never touches the balance. The conditional update guards
+   * against the balance having changed since the order's `coinsRedeemed` was
+   * fixed, rather than ever letting it go negative.
+   */
+  private async debitCoins(tx: Prisma.TransactionClient, userId: string, amount: number) {
+    const debited = await tx.user.updateMany({
+      where: { id: userId, coinsBalance: { gte: amount } },
+      data: { coinsBalance: { decrement: amount } },
+    });
+    if (debited.count === 0) {
+      throw new ConflictException(
+        'Your FreshBhoj Coins balance changed — please review your cart and try again',
+      );
+    }
+    await tx.coinTransaction.create({
+      data: { userId, amount: -amount, reason: CoinTransactionReason.ORDER_REDEMPTION },
+    });
   }
 
   private async getOwnedOrder(userId: string, orderId: string): Promise<OrderRow> {

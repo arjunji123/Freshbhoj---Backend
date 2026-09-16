@@ -46,6 +46,14 @@ export class AddCartItemDto {
   @IsOptional()
   @IsBoolean()
   replaceCart?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'Set when this add-to-cart came from tapping a shoppable Kitchen Story — attributes the eventual order back to it.',
+  })
+  @IsOptional()
+  @IsUUID()
+  sourceStoryId?: string;
 }
 
 export class UpdateCartItemDto {

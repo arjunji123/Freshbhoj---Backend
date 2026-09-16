@@ -1,11 +1,27 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { CoinTransactionReason } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { PRICING } from '../../../common/utils/pricing';
 
 /** Coins credited to the person whose code was used. */
 export const REFERRER_BONUS_COINS = 100;
 /** Coins credited to the new user who redeemed a code. */
 export const REFEREE_BONUS_COINS = 50;
+
+export interface CoinRedemptionEvaluation {
+  /** The user's current coin balance, untouched by this call. */
+  balance: number;
+  /** Whether the subtotal even qualifies for coin redemption. */
+  eligible: boolean;
+  /** Most coins this cart could redeem right now. */
+  maxRedeemable: number;
+  /** What actually gets redeemed — `requestedCoins` clamped to `maxRedeemable`. */
+  redeemed: number;
+  /** 1 coin = ₹1, so this always equals `redeemed`. */
+  discount: number;
+  /** Set when `requestedCoins` couldn't be fully honoured, for the app to show inline. */
+  invalidReason: string | null;
+}
 
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no 0/O/1/I — easy to read aloud
 const CODE_LENGTH = 6;
@@ -109,6 +125,44 @@ export class ReferralService {
 
     const summary = await this.getSummary(userId);
     return { ...summary, coinsEarned: REFEREE_BONUS_COINS };
+  }
+
+  /**
+   * Non-throwing evaluation — re-run on every cart read and at order placement
+   * so a redemption that stops qualifying (cart dropped below ₹1000, balance
+   * changed) is caught without erroring out, mirroring `CouponsService.evaluate`.
+   */
+  async evaluateRedemption(
+    userId: string,
+    itemsTotal: number,
+    requestedCoins: number,
+  ): Promise<CoinRedemptionEvaluation> {
+    const user = await this.prisma.user.findUniqueOrThrow({
+      where: { id: userId },
+      select: { coinsBalance: true },
+    });
+
+    const eligible = itemsTotal >= PRICING.COINS_MIN_ORDER_VALUE;
+    const maxRedeemable = eligible
+      ? Math.min(user.coinsBalance, PRICING.MAX_REDEEMABLE_COINS)
+      : 0;
+    const redeemed = Math.max(0, Math.min(requestedCoins, maxRedeemable));
+
+    let invalidReason: string | null = null;
+    if (requestedCoins > 0 && redeemed < requestedCoins) {
+      invalidReason = !eligible
+        ? `Add items worth ₹${PRICING.COINS_MIN_ORDER_VALUE - itemsTotal} more to use your coins`
+        : 'Your FreshBhoj Coins balance has changed';
+    }
+
+    return {
+      balance: user.coinsBalance,
+      eligible,
+      maxRedeemable,
+      redeemed,
+      discount: redeemed,
+      invalidReason,
+    };
   }
 
   private generateCode(): string {

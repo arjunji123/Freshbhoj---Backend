@@ -1,11 +1,17 @@
 import { Controller, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
-import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { User } from '@prisma/client';
 import { StoriesService } from './stories.service';
 import { StoryFeedQueryDto } from './dto/stories.dto';
-import { KitchenStoryGroupDto, StorySeenDto } from './dto/stories.response.dto';
+import {
+  KitchenStoryGroupDto,
+  StoryLikeDto,
+  StorySeenDto,
+  StoryShareDto,
+} from './dto/stories.response.dto';
 import { Public } from '../../../common/decorators/public.decorator';
 import { OptionalUser } from '../../../common/decorators/optional-user.decorator';
+import { CurrentUser } from '../../../common/decorators/current-user.decorator';
 import {
   ApiEnvelope,
   ApiEnvelopeArray,
@@ -61,5 +67,25 @@ export class StoriesController {
   @ApiEnvelopeError(404, 'Story not found')
   async seen(@Param('id', ParseUUIDPipe) id: string, @OptionalUser() user?: User) {
     return { message: 'Story marked seen', data: await this.storiesService.markSeen(id, user?.id) };
+  }
+
+  @ApiBearerAuth('JWT-auth')
+  @Post(':id/like')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Like or unlike a story (toggle)' })
+  @ApiEnvelope(StoryLikeDto)
+  @ApiEnvelopeError(404, 'Story not found')
+  async like(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: User) {
+    return { message: 'Like updated', data: await this.storiesService.toggleLike(id, user.id) };
+  }
+
+  @Public()
+  @Post(':id/share')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Register a share (fire-and-forget counter)' })
+  @ApiEnvelope(StoryShareDto)
+  @ApiEnvelopeError(404, 'Story not found')
+  async share(@Param('id', ParseUUIDPipe) id: string) {
+    return { message: 'Share recorded', data: await this.storiesService.registerShare(id) };
   }
 }

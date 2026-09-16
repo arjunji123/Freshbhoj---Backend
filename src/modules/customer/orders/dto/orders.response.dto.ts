@@ -80,8 +80,17 @@ export class OrderPricingDto {
   @ApiProperty({ example: 20 })
   taxes: number;
 
-  @ApiProperty({ example: 150 })
+  @ApiProperty({ example: 200, description: 'couponDiscount + coinDiscount' })
   discount: number;
+
+  @ApiProperty({ example: 150, description: 'The coupon\'s share of `discount`' })
+  couponDiscount: number;
+
+  @ApiProperty({ example: 50, description: 'Coins redeemed on this order' })
+  coinsRedeemed: number;
+
+  @ApiProperty({ example: 50, description: 'The coins\' share of `discount` (1 coin = ₹1)' })
+  coinDiscount: number;
 
   @ApiProperty({ example: 428 })
   totalAmount: number;

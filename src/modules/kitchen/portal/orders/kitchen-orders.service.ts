@@ -51,6 +51,12 @@ export class KitchenOrdersService {
     const where: Prisma.OrderWhereInput = {
       kitchenId: kitchen.id,
       ...(query.status?.length && { status: { in: query.status } }),
+      ...((query.dateFrom || query.dateTo) && {
+        createdAt: {
+          ...(query.dateFrom && { gte: new Date(query.dateFrom) }),
+          ...(query.dateTo && { lte: new Date(query.dateTo) }),
+        },
+      }),
     };
 
     const [rows, total] = await Promise.all([

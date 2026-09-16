@@ -74,6 +74,16 @@ export class TokenPairDto {
   tokenType: string;
 }
 
+export class AccountTypeResultDto {
+  @ApiProperty({
+    enum: ['KITCHEN', 'CUSTOMER'],
+    example: 'CUSTOMER',
+    description:
+      'KITCHEN when a kitchen-partner account already exists for this phone (any onboarding/verification status) — the app should route into the kitchen OTP flow instead of the customer one. A phone with no kitchen account resolves to CUSTOMER, including brand-new numbers.',
+  })
+  accountType: 'KITCHEN' | 'CUSTOMER';
+}
+
 export class VerifyOtpResultDto {
   @ApiProperty({
     example: false,

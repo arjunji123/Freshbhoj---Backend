@@ -1,4 +1,4 @@
-import { IsEnum, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsDateString, IsEnum, IsOptional, IsString, MaxLength } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { OrderStatus } from '@prisma/client';
@@ -16,6 +16,16 @@ export class KitchenOrderQueryDto extends PaginationQueryDto {
   @Transform(toArray)
   @IsEnum(OrderStatus, { each: true })
   status?: OrderStatus[];
+
+  @ApiPropertyOptional({ example: '2026-09-01T00:00:00.000Z', description: 'Inclusive lower bound on createdAt — powers the history view\'s day/month/year filters' })
+  @IsOptional()
+  @IsDateString()
+  dateFrom?: string;
+
+  @ApiPropertyOptional({ example: '2026-09-30T23:59:59.999Z', description: 'Inclusive upper bound on createdAt' })
+  @IsOptional()
+  @IsDateString()
+  dateTo?: string;
 }
 
 /** The kitchen-facing subset of the customer's transition list — a partner

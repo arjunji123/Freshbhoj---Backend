@@ -253,3 +253,24 @@ export class SetMealAvailabilityDto {
   @IsBoolean()
   isAvailable: boolean;
 }
+
+export class AnalyzeMealDto {
+  @ApiProperty({ example: 'Paneer Butter Masala' })
+  @IsString()
+  @MinLength(3)
+  @MaxLength(80)
+  name: string;
+
+  @ApiPropertyOptional({ example: 'Creamy tomato gravy, cottage cheese, butter, served with 2 rotis' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  description?: string;
+
+  @ApiPropertyOptional({ type: [String], example: ['paneer', 'butter', 'tomato', 'cream'] })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(30)
+  @IsString({ each: true })
+  ingredients?: string[];
+}

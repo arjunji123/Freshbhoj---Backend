@@ -73,7 +73,11 @@ export class ReviewsService {
   // READ
   // ──────────────────────────────────────────────────────────────────────────
 
-  async findForKitchen(kitchenId: string, query: ReviewQueryDto): Promise<Paginated<any>> {
+  async findForKitchen(
+    kitchenId: string,
+    query: ReviewQueryDto,
+    userId?: string,
+  ): Promise<Paginated<any>> {
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
 
@@ -94,10 +98,15 @@ export class ReviewsService {
       this.prisma.review.count({ where }),
     ]);
 
-    return paginate(rows.map((r) => this.toReview(r)), page, limit, total);
+    const helpfulSet = await this.getHelpfulSet(rows, userId);
+    return paginate(rows.map((r) => this.toReview(r, helpfulSet)), page, limit, total);
   }
 
-  async findForMeal(mealId: string, query: ReviewQueryDto): Promise<Paginated<any>> {
+  async findForMeal(
+    mealId: string,
+    query: ReviewQueryDto,
+    userId?: string,
+  ): Promise<Paginated<any>> {
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
     const where: Prisma.ReviewWhereInput = { mealId, ...(query.rating && { rating: query.rating }) };
@@ -113,7 +122,18 @@ export class ReviewsService {
       this.prisma.review.count({ where }),
     ]);
 
-    return paginate(rows.map((r) => this.toReview(r)), page, limit, total);
+    const helpfulSet = await this.getHelpfulSet(rows, userId);
+    return paginate(rows.map((r) => this.toReview(r, helpfulSet)), page, limit, total);
+  }
+
+  /** Which of these reviews the given user has already marked helpful. */
+  private async getHelpfulSet(rows: Array<{ id: string }>, userId?: string): Promise<Set<string>> {
+    if (!userId || rows.length === 0) return new Set();
+    const votes = await this.prisma.reviewHelpfulVote.findMany({
+      where: { userId, reviewId: { in: rows.map((r) => r.id) } },
+      select: { reviewId: true },
+    });
+    return new Set(votes.map((v) => v.reviewId));
   }
 
   /**
@@ -179,19 +199,31 @@ export class ReviewsService {
     }));
   }
 
-  async toggleHelpful(reviewId: string) {
+  /** A real per-user toggle — one vote per (review, user), not an open counter. */
+  async toggleHelpful(userId: string, reviewId: string) {
     const review = await this.prisma.review.findUnique({
       where: { id: reviewId },
       select: { id: true },
     });
     if (!review) throw new NotFoundException('Review not found');
 
-    const updated = await this.prisma.review.update({
-      where: { id: reviewId },
-      data: { likeCount: { increment: 1 } },
-      select: { id: true, likeCount: true },
+    const existingVote = await this.prisma.reviewHelpfulVote.findUnique({
+      where: { reviewId_userId: { reviewId, userId } },
+      select: { id: true },
     });
-    return updated;
+
+    const [updated] = await this.prisma.$transaction([
+      this.prisma.review.update({
+        where: { id: reviewId },
+        data: { likeCount: { [existingVote ? 'decrement' : 'increment']: 1 } },
+        select: { id: true, likeCount: true },
+      }),
+      existingVote
+        ? this.prisma.reviewHelpfulVote.delete({ where: { id: existingVote.id } })
+        : this.prisma.reviewHelpfulVote.create({ data: { reviewId, userId } }),
+    ]);
+
+    return { ...updated, isHelpful: !existingVote };
   }
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -240,7 +272,7 @@ export class ReviewsService {
     } satisfies Prisma.ReviewInclude;
   }
 
-  private toReview(review: any) {
+  private toReview(review: any, helpfulSet?: Set<string>) {
     const name: string = review.user?.fullName ?? 'FreshBhoj User';
     return {
       id: review.id,
@@ -250,6 +282,7 @@ export class ReviewsService {
       tags: review.tags,
       isVerified: review.isVerified,
       likeCount: review.likeCount,
+      isHelpful: helpfulSet?.has(review.id) ?? false,
       createdAt: review.createdAt,
       meal: review.meal,
       author: {

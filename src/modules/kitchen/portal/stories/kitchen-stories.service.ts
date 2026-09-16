@@ -1,6 +1,6 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../../../prisma/prisma.service';
-import { PublishStoryDto } from './dto/kitchen-stories.dto';
+import { PublishStoryDto, UpdateStoryCaptionDto } from './dto/kitchen-stories.dto';
 
 const STORY_LIFETIME_HOURS = 24;
 
@@ -20,8 +20,19 @@ export class KitchenStoriesService {
     const stories = await this.prisma.kitchenStory.findMany({
       where: { kitchenId: kitchen.id },
       orderBy: { createdAt: 'desc' },
+      include: { meal: { select: { name: true } } },
     });
-    return stories.map((story) => this.toDto(story));
+
+    // Live count, not denormalised — this is a low-traffic admin read, and it
+    // stays exactly right even if a story is edited/expires after the order.
+    const orderCounts = await this.prisma.order.groupBy({
+      by: ['sourceStoryId'],
+      where: { sourceStoryId: { in: stories.map((s) => s.id) } },
+      _count: { _all: true },
+    });
+    const orderCountByStory = new Map(orderCounts.map((row) => [row.sourceStoryId, row._count._all]));
+
+    return stories.map((story) => this.toDto(story, orderCountByStory.get(story.id) ?? 0));
   }
 
   async publish(accountId: string, dto: PublishStoryDto) {
@@ -49,6 +60,7 @@ export class KitchenStoriesService {
         city: kitchen.city,
         expiresAt: new Date(Date.now() + STORY_LIFETIME_HOURS * 60 * 60 * 1000),
       },
+      include: { meal: { select: { name: true } } },
     });
 
     return this.toDto(story);
@@ -57,17 +69,37 @@ export class KitchenStoriesService {
   /** Pull a story down early — the dish sold out, or it was posted by mistake. */
   async deactivate(accountId: string, storyId: string) {
     const kitchen = await this.requireKitchen(accountId);
+    await this.assertOwned(kitchen.id, storyId);
+
+    await this.prisma.kitchenStory.update({ where: { id: storyId }, data: { isActive: false } });
+    return { id: storyId };
+  }
+
+  /** Typo in the caption, or the special changed — no need to repost from scratch. */
+  async updateCaption(accountId: string, storyId: string, dto: UpdateStoryCaptionDto) {
+    const kitchen = await this.requireKitchen(accountId);
+    await this.assertOwned(kitchen.id, storyId);
+
+    const story = await this.prisma.kitchenStory.update({
+      where: { id: storyId },
+      data: { caption: dto.caption },
+      include: { meal: { select: { name: true } } },
+    });
+
+    const orderCount = await this.prisma.order.count({ where: { sourceStoryId: storyId } });
+    return this.toDto(story, orderCount);
+  }
+
+  private async assertOwned(kitchenId: string, storyId: string) {
     const story = await this.prisma.kitchenStory.findUnique({
       where: { id: storyId },
       select: { kitchenId: true },
     });
     if (!story) throw new NotFoundException('Story not found');
-    if (story.kitchenId !== kitchen.id) {
+    if (story.kitchenId !== kitchenId) {
       throw new ForbiddenException('This story does not belong to your kitchen');
     }
-
-    await this.prisma.kitchenStory.update({ where: { id: storyId }, data: { isActive: false } });
-    return { id: storyId };
+    return story;
   }
 
   private async requireKitchen(accountId: string) {
@@ -79,18 +111,24 @@ export class KitchenStoriesService {
     return kitchen;
   }
 
-  private toDto(story: {
-    id: string;
-    mediaType: any;
-    mediaUrl: string;
-    thumbnailUrl: string | null;
-    caption: string | null;
-    durationSec: number;
-    viewCount: number;
-    isActive: boolean;
-    createdAt: Date;
-    expiresAt: Date;
-  }) {
+  private toDto(
+    story: {
+      id: string;
+      mediaType: any;
+      mediaUrl: string;
+      thumbnailUrl: string | null;
+      caption: string | null;
+      durationSec: number;
+      viewCount: number;
+      likeCount: number;
+      shareCount: number;
+      isActive: boolean;
+      createdAt: Date;
+      expiresAt: Date;
+      meal?: { name: string } | null;
+    },
+    orderCount = 0,
+  ) {
     return {
       id: story.id,
       mediaType: story.mediaType,
@@ -99,6 +137,10 @@ export class KitchenStoriesService {
       caption: story.caption,
       durationSec: story.durationSec,
       viewCount: story.viewCount,
+      likeCount: story.likeCount,
+      shareCount: story.shareCount,
+      orderCount,
+      mealName: story.meal?.name ?? null,
       isActive: story.isActive,
       createdAt: story.createdAt,
       expiresAt: story.expiresAt,

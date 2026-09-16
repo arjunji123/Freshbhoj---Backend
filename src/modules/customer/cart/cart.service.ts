@@ -7,6 +7,7 @@ import {
 import { Cart, Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { CouponsService } from '../../platform/coupons/coupons.service';
+import { ReferralService } from '../../platform/referral/referral.service';
 import { buildPriceBreakdown, PRICING } from '../../../common/utils/pricing';
 import { isKitchenOpenNow } from '../../../common/utils/kitchen';
 import { AddCartItemDto, UpdateCartItemDto } from './dto/cart.dto';
@@ -54,6 +55,7 @@ export class CartService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly couponsService: CouponsService,
+    private readonly referralService: ReferralService,
   ) {}
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -122,7 +124,10 @@ export class CartService {
         });
       }
       await this.prisma.cartItem.deleteMany({ where: { cartId: cart.id } });
-      await this.prisma.cart.update({ where: { id: cart.id }, data: { couponCode: null } });
+      await this.prisma.cart.update({
+        where: { id: cart.id },
+        data: { couponCode: null, coinsToRedeem: 0, sourceStoryId: null },
+      });
     }
 
     const customizationIds = [...(dto.customizationIds ?? [])].sort();
@@ -153,6 +158,16 @@ export class CartService {
           customizationIds,
           specialInstructions: dto.specialInstructions,
         },
+      });
+    }
+
+    // Most-recent-story-wins: a customer who bounces between a couple of
+    // shoppable stories before checking out gets attributed to whichever one
+    // they actually acted on last.
+    if (dto.sourceStoryId) {
+      await this.prisma.cart.update({
+        where: { id: cart.id },
+        data: { sourceStoryId: dto.sourceStoryId },
       });
     }
 
@@ -190,7 +205,10 @@ export class CartService {
     const cart = await this.ensureCart(userId);
     await this.prisma.$transaction([
       this.prisma.cartItem.deleteMany({ where: { cartId: cart.id } }),
-      this.prisma.cart.update({ where: { id: cart.id }, data: { couponCode: null } }),
+      this.prisma.cart.update({
+        where: { id: cart.id },
+        data: { couponCode: null, coinsToRedeem: 0, sourceStoryId: null },
+      }),
     ]);
     return this.getCart(userId);
   }
@@ -216,6 +234,42 @@ export class CartService {
   async removeCoupon(userId: string) {
     const cart = await this.ensureCart(userId);
     await this.prisma.cart.update({ where: { id: cart.id }, data: { couponCode: null } });
+    return this.getCart(userId);
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // COINS
+  // ──────────────────────────────────────────────────────────────────────────
+
+  /** Redeems as many coins as the cart currently qualifies for — a simple toggle, not a slider. */
+  async applyCoins(userId: string) {
+    const { itemsTotal } = await this.computeItemsTotal(userId);
+    const evaluation = await this.referralService.evaluateRedemption(
+      userId,
+      itemsTotal,
+      PRICING.MAX_REDEEMABLE_COINS,
+    );
+
+    if (evaluation.maxRedeemable <= 0) {
+      throw new BadRequestException(
+        !evaluation.eligible
+          ? `Add items worth ₹${PRICING.COINS_MIN_ORDER_VALUE - itemsTotal} more to use your coins`
+          : 'You have no FreshBhoj Coins to redeem',
+      );
+    }
+
+    const cart = await this.ensureCart(userId);
+    await this.prisma.cart.update({
+      where: { id: cart.id },
+      data: { coinsToRedeem: evaluation.maxRedeemable },
+    });
+
+    return this.getCart(userId);
+  }
+
+  async removeCoins(userId: string) {
+    const cart = await this.ensureCart(userId);
+    await this.prisma.cart.update({ where: { id: cart.id }, data: { coinsToRedeem: 0 } });
     return this.getCart(userId);
   }
 
@@ -295,7 +349,8 @@ export class CartService {
 
     const itemsTotal = lines.reduce((sum, l) => sum + l.lineTotal, 0);
     const coupon = await this.couponsService.evaluate(cart.couponCode, itemsTotal, userId);
-    const pricing = buildPriceBreakdown(itemsTotal, coupon.discount);
+    const coins = await this.referralService.evaluateRedemption(userId, itemsTotal, cart.coinsToRedeem);
+    const pricing = buildPriceBreakdown(itemsTotal, coupon.discount, coins.discount);
 
     const kitchenRow = items[0]?.meal.kitchen ?? null;
     const kitchen = kitchenRow
@@ -326,6 +381,16 @@ export class CartService {
         discount: coupon.discount,
         /** Set when a previously-applied coupon stopped qualifying. */
         invalidReason: cart.couponCode && !coupon.valid ? coupon.reason : null,
+      },
+      coins: {
+        balance: coins.balance,
+        applied: coins.redeemed,
+        discount: coins.discount,
+        maxRedeemable: coins.maxRedeemable,
+        minOrderValue: PRICING.COINS_MIN_ORDER_VALUE,
+        maxPerOrder: PRICING.MAX_REDEEMABLE_COINS,
+        /** Set when a previously-applied redemption stopped qualifying in full. */
+        invalidReason: cart.coinsToRedeem > 0 ? coins.invalidReason : null,
       },
       pricing: {
         ...pricing,

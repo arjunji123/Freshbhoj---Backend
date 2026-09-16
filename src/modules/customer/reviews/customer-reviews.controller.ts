@@ -73,7 +73,10 @@ export class CustomerReviewsController {
   @ApiOperation({ summary: 'Mark a review as helpful' })
   @ApiEnvelope(ReviewHelpfulDto)
   @ApiEnvelopeError(404, 'Review not found')
-  async helpful(@Param('id', ParseUUIDPipe) id: string) {
-    return { message: 'Marked as helpful', data: await this.reviewsService.toggleHelpful(id) };
+  async helpful(@CurrentUser() user: User, @Param('id', ParseUUIDPipe) id: string) {
+    return {
+      message: 'Marked as helpful',
+      data: await this.reviewsService.toggleHelpful(user.id, id),
+    };
   }
 }

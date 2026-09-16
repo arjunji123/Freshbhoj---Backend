@@ -40,6 +40,8 @@ export class StoriesService {
         caption: true,
         durationSec: true,
         viewCount: true,
+        likeCount: true,
+        shareCount: true,
         createdAt: true,
         expiresAt: true,
         meal: { select: { id: true, name: true, price: true, images: true, foodType: true } },
@@ -60,6 +62,7 @@ export class StoriesService {
     });
 
     const seen = await this.getSeenStoryIds(userId, stories.map((s) => s.id));
+    const liked = await this.getLikedStoryIds(userId, stories.map((s) => s.id));
 
     // Group into one entry per kitchen, preserving publish order within each.
     const byKitchen = new Map<string, any>();
@@ -90,9 +93,12 @@ export class StoriesService {
         caption: story.caption,
         durationSec: story.durationSec,
         viewCount: story.viewCount,
+        likeCount: story.likeCount,
+        shareCount: story.shareCount,
         publishedAt: story.createdAt,
         expiresAt: story.expiresAt,
         isSeen: seen.has(story.id),
+        isLiked: liked.has(story.id),
         meal: story.meal
           ? {
               id: story.meal.id,
@@ -172,6 +178,52 @@ export class StoriesService {
       select: { storyId: true },
     });
     return new Set(views.map((v) => v.storyId));
+  }
+
+  private async getLikedStoryIds(userId: string | undefined, storyIds: string[]) {
+    if (!userId || !storyIds.length) return new Set<string>();
+    const likes = await this.prisma.kitchenStoryLike.findMany({
+      where: { userId, storyId: { in: storyIds } },
+      select: { storyId: true },
+    });
+    return new Set(likes.map((l) => l.storyId));
+  }
+
+  /** Per-user toggle, same shape as `ReviewsService.toggleHelpful`. */
+  async toggleLike(storyId: string, userId: string) {
+    const story = await this.prisma.kitchenStory.findUnique({ where: { id: storyId }, select: { id: true } });
+    if (!story) throw new NotFoundException('Story not found');
+
+    const existing = await this.prisma.kitchenStoryLike.findUnique({
+      where: { storyId_userId: { storyId, userId } },
+      select: { id: true },
+    });
+
+    const [updated] = await this.prisma.$transaction([
+      this.prisma.kitchenStory.update({
+        where: { id: storyId },
+        data: { likeCount: { [existing ? 'decrement' : 'increment']: 1 } },
+        select: { likeCount: true },
+      }),
+      existing
+        ? this.prisma.kitchenStoryLike.delete({ where: { id: existing.id } })
+        : this.prisma.kitchenStoryLike.create({ data: { storyId, userId } }),
+    ]);
+
+    return { storyId, isLiked: !existing, likeCount: updated.likeCount };
+  }
+
+  /** Fire-and-forget counter — the app calls this right after the native share sheet opens. */
+  async registerShare(storyId: string) {
+    const story = await this.prisma.kitchenStory.findUnique({ where: { id: storyId }, select: { id: true } });
+    if (!story) throw new NotFoundException('Story not found');
+
+    const updated = await this.prisma.kitchenStory.update({
+      where: { id: storyId },
+      data: { shareCount: { increment: 1 } },
+      select: { shareCount: true },
+    });
+    return { storyId, shareCount: updated.shareCount };
   }
 
   /** Used by the partner portal when a kitchen publishes. */

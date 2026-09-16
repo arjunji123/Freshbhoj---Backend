@@ -1,8 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { MealSlot } from '@prisma/client';
 import { GoalTagDto, MealCategoryDto } from '../../catalog/dto/catalog.response.dto';
-import { KitchenCardDto } from '../../kitchens/dto/kitchens.response.dto';
-import { MealCardDto } from '../../meals/dto/meals.response.dto';
 import { ReelDto } from '../../reels/dto/reels.response.dto';
 import { OrderDetailDto } from '../../../customer/orders/dto/orders.response.dto';
 
@@ -22,12 +20,6 @@ export class HomeFeedDto {
 
   @ApiProperty({ type: [MealCategoryDto] })
   categories: MealCategoryDto[];
-
-  @ApiProperty({ type: [KitchenCardDto], description: 'Verified kitchens rail' })
-  featuredKitchens: KitchenCardDto[];
-
-  @ApiProperty({ type: [MealCardDto], description: 'First page; the feed paginates via GET /meals' })
-  recommendedMeals: MealCardDto[];
 
   @ApiProperty({ type: [ReelDto] })
   trendingReels: ReelDto[];

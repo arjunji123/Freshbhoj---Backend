@@ -39,6 +39,7 @@ import { KitchenMenuModule } from './modules/kitchen/portal/menu/kitchen-menu.mo
 import { KitchenOrdersModule } from './modules/kitchen/portal/orders/kitchen-orders.module';
 import { KitchenStoriesModule } from './modules/kitchen/portal/stories/kitchen-stories.module';
 import { KitchenDashboardModule } from './modules/kitchen/portal/dashboard/kitchen-dashboard.module';
+import { KitchenUploadModule } from './modules/kitchen/portal/upload/kitchen-upload.module';
 
 // ── Platform ────────────────────────────────────────────────────────────────
 import { CouponsModule } from './modules/platform/coupons/coupons.module';
@@ -50,6 +51,7 @@ import jwtConfig from './config/jwt.config';
 import redisConfig from './config/redis.config';
 import awsConfig from './config/aws.config';
 import twilioConfig from './config/twilio.config';
+import geminiConfig from './config/gemini.config';
 
 @Module({
   imports: [
@@ -57,7 +59,7 @@ import twilioConfig from './config/twilio.config';
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: '.env',
-      load: [appConfig, jwtConfig, redisConfig, awsConfig, twilioConfig],
+      load: [appConfig, jwtConfig, redisConfig, awsConfig, twilioConfig, geminiConfig],
     }),
 
     // ── Infrastructure ───────────────────────────────────────────────────────
@@ -96,6 +98,7 @@ import twilioConfig from './config/twilio.config';
     KitchenOrdersModule,
     KitchenStoriesModule,
     KitchenDashboardModule,
+    KitchenUploadModule,
   ],
   controllers: [AppController],
   providers: [
