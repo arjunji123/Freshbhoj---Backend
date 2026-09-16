@@ -120,7 +120,20 @@ export class KitchenOrdersService {
       throw new BadRequestException('A kitchen cannot set that status');
     }
 
-    return this.ordersService.advanceStatus(orderId, next as any, note);
+    // A kitchen never touches PENDING_PAYMENT or refunds — the customer
+    // hasn't actually paid yet, so there's nothing for the kitchen to do.
+    if (order.status === 'PENDING_PAYMENT') {
+      throw new BadRequestException("This order hasn't been paid for yet — nothing to do here");
+    }
+
+    // Delegate to the customer-facing service for the actual transition —
+    // it owns ALLOWED_TRANSITIONS and the tracking event write. Its return
+    // value (full order detail, including the customer's address and the
+    // delivery partner's phone) is not for kitchen eyes, so it's discarded
+    // here and the order is re-fetched in the kitchen's own narrower shape.
+    await this.ordersService.advanceStatus(orderId, next as any, note);
+
+    return this.findOne(accountId, orderId);
   }
 
   private toCard(order: KitchenOrderRow) {

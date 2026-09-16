@@ -189,28 +189,51 @@ export class StoriesService {
     return new Set(likes.map((l) => l.storyId));
   }
 
-  /** Per-user toggle, same shape as `ReviewsService.toggleHelpful`. */
+  /**
+   * Per-user toggle, same shape as `ReviewsService.toggleHelpful`.
+   *
+   * The read-then-write has to happen inside one interactive transaction —
+   * two concurrent taps would otherwise both see "not liked yet" and both try
+   * to create the like row, and the second loses to the
+   * `@@unique([storyId, userId])` constraint. That race is caught below and
+   * treated as "already liked" rather than left to surface as a 500.
+   */
   async toggleLike(storyId: string, userId: string) {
     const story = await this.prisma.kitchenStory.findUnique({ where: { id: storyId }, select: { id: true } });
     if (!story) throw new NotFoundException('Story not found');
 
-    const existing = await this.prisma.kitchenStoryLike.findUnique({
-      where: { storyId_userId: { storyId, userId } },
-      select: { id: true },
-    });
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const existing = await tx.kitchenStoryLike.findUnique({
+          where: { storyId_userId: { storyId, userId } },
+          select: { id: true },
+        });
 
-    const [updated] = await this.prisma.$transaction([
-      this.prisma.kitchenStory.update({
-        where: { id: storyId },
-        data: { likeCount: { [existing ? 'decrement' : 'increment']: 1 } },
-        select: { likeCount: true },
-      }),
-      existing
-        ? this.prisma.kitchenStoryLike.delete({ where: { id: existing.id } })
-        : this.prisma.kitchenStoryLike.create({ data: { storyId, userId } }),
-    ]);
+        const updated = await tx.kitchenStory.update({
+          where: { id: storyId },
+          data: { likeCount: { [existing ? 'decrement' : 'increment']: 1 } },
+          select: { likeCount: true },
+        });
+        if (existing) {
+          await tx.kitchenStoryLike.delete({ where: { id: existing.id } });
+        } else {
+          await tx.kitchenStoryLike.create({ data: { storyId, userId } });
+        }
 
-    return { storyId, isLiked: !existing, likeCount: updated.likeCount };
+        return { storyId, isLiked: !existing, likeCount: updated.likeCount };
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        // Lost the race to a concurrent like — already liked, so report the
+        // current state idempotently instead of failing the request.
+        const current = await this.prisma.kitchenStory.findUnique({
+          where: { id: storyId },
+          select: { likeCount: true },
+        });
+        return { storyId, isLiked: true, likeCount: current?.likeCount ?? 0 };
+      }
+      throw error;
+    }
   }
 
   /** Fire-and-forget counter — the app calls this right after the native share sheet opens. */

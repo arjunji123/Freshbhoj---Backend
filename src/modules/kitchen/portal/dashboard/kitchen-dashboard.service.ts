@@ -16,8 +16,15 @@ export class KitchenDashboardService {
     const kitchen = await this.prisma.kitchen.findUnique({ where: { accountId } });
     if (!kitchen) throw new BadRequestException('Complete onboarding to create your kitchen first');
 
-    const startOfDay = new Date();
-    startOfDay.setHours(0, 0, 0, 0);
+    // "Today" must mean the IST calendar day regardless of the server
+    // process's local timezone (Vercel runs UTC, so a naive setHours(0,0,0,0)
+    // would start "today" at 5:30am IST) — same correction as
+    // `isKitchenOpenNow` in common/utils/kitchen.ts.
+    const now = new Date();
+    const istNow = new Date(now.getTime() + (330 + now.getTimezoneOffset()) * 60_000);
+    const startOfDayIst = new Date(istNow);
+    startOfDayIst.setHours(0, 0, 0, 0);
+    const startOfDay = new Date(startOfDayIst.getTime() - (330 + now.getTimezoneOffset()) * 60_000);
 
     const [
       todayOrders,

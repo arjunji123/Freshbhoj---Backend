@@ -100,10 +100,10 @@ export class OnboardingService {
       data: {
         ownerName: dto.ownerName,
         email: dto.email,
-        onboardingStep: this.advance(accountId, KitchenOnboardingStep.OWNER_DETAILS),
       },
     });
 
+    await this.setStep(accountId, KitchenOnboardingStep.OWNER_DETAILS);
     return this.getStatus(accountId);
   }
 
@@ -320,10 +320,6 @@ export class OnboardingService {
         data: { onboardingStep: step },
       });
     }
-  }
-
-  private advance(_accountId: string, step: KitchenOnboardingStep) {
-    return step;
   }
 
   private async requireKitchen(accountId: string, message: string) {

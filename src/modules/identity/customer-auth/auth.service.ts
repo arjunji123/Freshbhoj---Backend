@@ -15,6 +15,7 @@ import { ReferralService } from '../../platform/referral/referral.service';
 import { User, OtpPurpose } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { v4 as uuidv4 } from 'uuid';
+import { normalizePhone } from '../../../common/utils/phone';
 
 export interface TokenPair {
   accessToken: string;
@@ -57,7 +58,9 @@ export class AuthService {
   // SEND OTP
   // ──────────────────────────────────────────────────────────────────────────
 
-  async sendOtp(phone: string): Promise<OtpSendResult> {
+  async sendOtp(rawPhone: string): Promise<OtpSendResult> {
+    const phone = normalizePhone(rawPhone);
+
     // Rate limit check
     const allowed = await this.redis.checkRateLimit(
       `sms:${phone}`,
@@ -121,7 +124,7 @@ export class AuthService {
   // ──────────────────────────────────────────────────────────────────────────
 
   async getAccountType(rawPhone: string): Promise<{ accountType: 'KITCHEN' | 'CUSTOMER' }> {
-    const phone = this.normalizePhone(rawPhone);
+    const phone = normalizePhone(rawPhone);
     const kitchenAccount = await this.prisma.kitchenAccount.findUnique({
       where: { phone },
       select: { id: true },
@@ -133,7 +136,8 @@ export class AuthService {
   // VERIFY OTP
   // ──────────────────────────────────────────────────────────────────────────
 
-  async verifyOtp(phone: string, otp: string): Promise<VerifyOtpResult> {
+  async verifyOtp(rawPhone: string, otp: string): Promise<VerifyOtpResult> {
+    const phone = normalizePhone(rawPhone);
     const maxAttempts = this.configService.get<number>('app.otp.maxAttempts', 5);
     const expiryMinutes = this.configService.get<number>('app.otp.expiryMinutes', 10);
     const ttlSeconds = expiryMinutes * 60;
@@ -232,9 +236,11 @@ export class AuthService {
       throw new UnauthorizedException('Invalid or expired refresh token');
     }
 
-    // Find in DB
-    const hashedToken = await bcrypt.hash(refreshTokenValue, 10);
-    const storedToken = await this.prisma.refreshToken.findFirst({
+    // Find in DB — bcrypt hashes are salted, so we cannot look this up by an
+    // equality WHERE clause on a freshly-computed hash. Load every active
+    // session for this user and compare against each one to find the row
+    // that actually matches the presented token.
+    const candidates = await this.prisma.refreshToken.findMany({
       where: {
         userId: payload.sub,
         isRevoked: false,
@@ -242,6 +248,14 @@ export class AuthService {
       },
       include: { user: true },
     });
+
+    let storedToken: (typeof candidates)[number] | undefined;
+    for (const candidate of candidates) {
+      if (await bcrypt.compare(refreshTokenValue, candidate.token)) {
+        storedToken = candidate;
+        break;
+      }
+    }
 
     if (!storedToken) {
       throw new UnauthorizedException('Refresh token not found or revoked');
@@ -362,11 +376,5 @@ export class AuthService {
   private sanitizeUser(user: User): Partial<User> {
     const { ...rest } = user;
     return rest;
-  }
-
-  /** Defensive E.164-ish normalization — neither OTP flow guarantees a `+91` prefix on input. */
-  private normalizePhone(phone: string): string {
-    const digits = phone.replace(/\D/g, '');
-    return `+91${digits.slice(-10)}`;
   }
 }

@@ -17,6 +17,7 @@ import {
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { SmsService } from '../customer-auth/sms.service';
+import { normalizePhone } from '../../../common/utils/phone';
 
 export interface KitchenTokenPair {
   accessToken: string;
@@ -49,7 +50,8 @@ export class KitchenAuthService {
   // OTP
   // ──────────────────────────────────────────────────────────────────────────
 
-  async sendOtp(phone: string) {
+  async sendOtp(rawPhone: string) {
+    const phone = normalizePhone(rawPhone);
     const isDevMode = this.configService.get<boolean>('app.otp.devMode', true);
     const expiryMinutes = this.configService.get<number>('app.otp.expiryMinutes', 10);
 
@@ -91,7 +93,8 @@ export class KitchenAuthService {
   }
 
   /** Verifies the OTP, creating the partner account on first use. */
-  async verifyOtp(phone: string, otp: string) {
+  async verifyOtp(rawPhone: string, otp: string) {
+    const phone = normalizePhone(rawPhone);
     const otpLog = await this.prisma.otpLog.findFirst({
       where: {
         phone,
@@ -154,10 +157,22 @@ export class KitchenAuthService {
       throw new UnauthorizedException('This refresh token is not for a partner session');
     }
 
-    const stored = await this.prisma.kitchenRefreshToken.findFirst({
+    // bcrypt hashes are salted, so we cannot look this up by an equality WHERE
+    // clause on a freshly-computed hash. Load every active session for this
+    // account and compare against each one to find the row that actually
+    // matches the presented token.
+    const candidates = await this.prisma.kitchenRefreshToken.findMany({
       where: { accountId: payload.sub, isRevoked: false, expiresAt: { gt: new Date() } },
       include: { account: true },
     });
+
+    let stored: (typeof candidates)[number] | undefined;
+    for (const candidate of candidates) {
+      if (await bcrypt.compare(refreshToken, candidate.token)) {
+        stored = candidate;
+        break;
+      }
+    }
     if (!stored) throw new UnauthorizedException('Refresh token not found or revoked');
 
     // Rotate: the presented token is single-use.

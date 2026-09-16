@@ -24,9 +24,11 @@ export class KitchenProfileService {
         ).map((c) => c.id)
       : undefined;
 
-    // Cuisines live on Meal, not Kitchen — apply the update to every existing
-    // dish so "what this kitchen cooks" stays in one place for the partner to
-    // set, while the filter customers use still queries per-meal.
+    // Cuisines live on Meal, not Kitchen. Backfills the kitchen's primary
+    // cuisine (the first selected slug) onto any dish that doesn't have one
+    // yet; dishes the partner has already tagged individually are left
+    // alone, and cuisines beyond the first are not applied per-dish since a
+    // dish has one cuisine.
     if (cuisineIds && cuisineIds.length) {
       await this.prisma.meal.updateMany({
         where: { kitchenId: kitchen.id, cuisineId: null },

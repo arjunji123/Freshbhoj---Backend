@@ -4,7 +4,6 @@ import { KitchenAccount } from '@prisma/client';
 import { KitchenOrdersService } from './kitchen-orders.service';
 import { AdvanceOrderStatusDto, KitchenOrderQueryDto } from './dto/kitchen-orders.dto';
 import { KitchenOrderCardDto } from './dto/kitchen-orders.response.dto';
-import { OrderDetailDto } from '../../../customer/orders/dto/orders.response.dto';
 import { KitchenAuthGuard } from '../../../identity/kitchen-auth/guards/kitchen-auth.guard';
 import { CurrentKitchenAccount } from '../../../identity/kitchen-auth/decorators/current-kitchen.decorator';
 import {
@@ -68,7 +67,7 @@ export class KitchenOrdersController {
     description:
       'A kitchen may only set ACCEPTED, PREPARING, OUT_FOR_DELIVERY or CANCELLED — DELIVERED is the delivery partner’s call, and payment states are the gateway’s. Delegates to the same transition logic the customer tracking screen reads, so both sides agree.',
   })
-  @ApiEnvelope(OrderDetailDto, { description: 'Full order detail after the transition' })
+  @ApiEnvelope(KitchenOrderCardDto, { description: 'The order, kitchen view, after the transition' })
   @ApiEnvelopeError(400, 'Illegal transition, or not a status a kitchen may set')
   @ApiEnvelopeError(403, 'This order belongs to another kitchen')
   async advanceStatus(
