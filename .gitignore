@@ -29,3 +29,5 @@ logs/
 
 # Test
 coverage/
+.vercel
+.env*

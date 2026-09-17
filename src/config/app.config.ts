@@ -7,6 +7,8 @@ export default registerAs('app', () => ({
   appName: process.env.APP_NAME || 'FreshBhoj',
   frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3001',
   allowedOrigins: (process.env.ALLOWED_ORIGINS || '').split(',').filter(Boolean),
+  /** V0 ops-tool auth for kitchen-approval endpoints — see AdminSecretGuard. */
+  adminSecret: process.env.ADMIN_SECRET,
   otp: {
     expiryMinutes: parseInt(process.env.OTP_EXPIRY_MINUTES, 10) || 10,
     maxAttempts: parseInt(process.env.OTP_MAX_ATTEMPTS, 10) || 5,

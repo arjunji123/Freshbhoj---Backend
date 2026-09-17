@@ -34,6 +34,7 @@ import { HomeModule } from './modules/discovery/home/home.module';
 
 // ── Kitchen (partner onboarding + management, its own JWT audience) ─────────
 import { KitchenOnboardingModule } from './modules/kitchen/onboarding/onboarding.module';
+import { KitchenAdminModule } from './modules/kitchen/admin/kitchen-admin.module';
 import { KitchenProfileModule } from './modules/kitchen/portal/profile/kitchen-profile.module';
 import { KitchenMenuModule } from './modules/kitchen/portal/menu/kitchen-menu.module';
 import { KitchenOrdersModule } from './modules/kitchen/portal/orders/kitchen-orders.module';
@@ -93,6 +94,7 @@ import geminiConfig from './config/gemini.config';
     // ── Kitchen partner portal ────────────────────────────────────────────────
     KitchenAuthModule,
     KitchenOnboardingModule,
+    KitchenAdminModule,
     KitchenProfileModule,
     KitchenMenuModule,
     KitchenOrdersModule,
