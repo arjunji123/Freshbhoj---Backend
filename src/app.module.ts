@@ -41,6 +41,7 @@ import { KitchenOrdersModule } from './modules/kitchen/portal/orders/kitchen-ord
 import { KitchenStoriesModule } from './modules/kitchen/portal/stories/kitchen-stories.module';
 import { KitchenDashboardModule } from './modules/kitchen/portal/dashboard/kitchen-dashboard.module';
 import { KitchenUploadModule } from './modules/kitchen/portal/upload/kitchen-upload.module';
+import { KitchenReelsModule } from './modules/kitchen/portal/reels/kitchen-reels.module';
 
 // ── Platform ────────────────────────────────────────────────────────────────
 import { CouponsModule } from './modules/platform/coupons/coupons.module';
@@ -51,6 +52,7 @@ import appConfig from './config/app.config';
 import jwtConfig from './config/jwt.config';
 import redisConfig from './config/redis.config';
 import awsConfig from './config/aws.config';
+import firebaseConfig from './config/firebase.config';
 import twilioConfig from './config/twilio.config';
 import geminiConfig from './config/gemini.config';
 
@@ -60,7 +62,7 @@ import geminiConfig from './config/gemini.config';
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: '.env',
-      load: [appConfig, jwtConfig, redisConfig, awsConfig, twilioConfig, geminiConfig],
+      load: [appConfig, jwtConfig, redisConfig, awsConfig, firebaseConfig, twilioConfig, geminiConfig],
     }),
 
     // ── Infrastructure ───────────────────────────────────────────────────────
@@ -101,6 +103,7 @@ import geminiConfig from './config/gemini.config';
     KitchenStoriesModule,
     KitchenDashboardModule,
     KitchenUploadModule,
+    KitchenReelsModule,
   ],
   controllers: [AppController],
   providers: [

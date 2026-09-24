@@ -60,6 +60,7 @@ export class ReelsService {
       status: ReelStatus.PUBLISHED,
       kitchen: { status: 'ACTIVE' },
       ...(query.kitchenId && { kitchenId: query.kitchenId }),
+      ...(query.cuisineId && { meal: { cuisineId: query.cuisineId } }),
       ...(query.q && {
         OR: [
           { caption: { contains: query.q, mode: 'insensitive' } },

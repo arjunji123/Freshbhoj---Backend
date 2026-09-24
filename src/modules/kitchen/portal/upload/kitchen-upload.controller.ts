@@ -23,9 +23,9 @@ const ALLOWED_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.webp', '.mp4', '.mov', '.
 
 /**
  * One shared upload endpoint for every kitchen media need — menu photos, story
- * clips, onboarding documents, logo/cover. Everything else (menu, stories,
- * onboarding documents, kitchen profile) takes a plain URL string; get that
- * URL from here first.
+ * clips, reel video/thumbnail, onboarding documents, logo/cover. Everything
+ * else (menu, stories, reels, onboarding documents, kitchen profile) takes a
+ * plain URL string; get that URL from here first.
  */
 @ApiTags('Kitchen · Upload')
 @ApiBearerAuth('JWT-auth')
@@ -37,8 +37,8 @@ export class KitchenUploadController {
 
   @Post()
   @ApiOperation({
-    summary: 'Upload a menu photo, story clip, document, or branding image',
-    description: 'Multipart. Returns the URL to pass to menu/stories/onboarding/profile endpoints.',
+    summary: 'Upload a menu photo, story clip, reel video/thumbnail, document, or branding image',
+    description: 'Multipart. Returns the URL to pass to menu/stories/reels/onboarding/profile endpoints.',
   })
   @ApiConsumes('multipart/form-data')
   @ApiBody({

@@ -22,6 +22,13 @@ export class ReelFeedQueryDto extends PaginationQueryDto {
   @IsUUID()
   kitchenId?: string;
 
+  @ApiPropertyOptional({
+    description: 'Restrict the feed to reels whose shoppable dish is in this cuisine — non-shoppable reels are excluded',
+  })
+  @IsOptional()
+  @IsUUID()
+  cuisineId?: string;
+
   @ApiPropertyOptional({ example: 'tandoori', description: 'Search captions and hashtags' })
   @IsOptional()
   @IsString()

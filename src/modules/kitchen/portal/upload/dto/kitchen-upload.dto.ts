@@ -8,6 +8,8 @@ export enum KitchenUploadPurpose {
   KITCHEN_LOGO = 'KITCHEN_LOGO',
   KITCHEN_COVER = 'KITCHEN_COVER',
   DOCUMENT = 'DOCUMENT',
+  REEL_VIDEO = 'REEL_VIDEO',
+  REEL_THUMBNAIL = 'REEL_THUMBNAIL',
 }
 
 export class KitchenUploadDto {
