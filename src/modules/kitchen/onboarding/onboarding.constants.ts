@@ -1,4 +1,4 @@
-import { KitchenOnboardingStep } from '@prisma/client';
+import { KitchenDocumentType, KitchenOnboardingStep } from '@prisma/client';
 
 /**
  * The onboarding funnel, in order. `KitchenAccount.onboardingStep` stores the
@@ -59,5 +59,16 @@ export const ONBOARDING_STEPS: Array<{
 
 export const STEP_ORDER = ONBOARDING_STEPS.map((s) => s.step);
 
-/** FSSAI is non-negotiable — we cannot list a kitchen without it. */
-export const REQUIRED_DOCUMENT_TYPES = ['FSSAI'] as const;
+/** These cannot be skipped — we cannot list a kitchen without them. */
+export const REQUIRED_DOCUMENT_TYPES = [
+  KitchenDocumentType.FSSAI,
+  KitchenDocumentType.KITCHEN_PHOTO_FRONT,
+  KitchenDocumentType.KITCHEN_PHOTO_MAIN,
+] as const;
+
+/** Friendly, per-type wording for the `pending[]` checklist. */
+export const REQUIRED_DOCUMENT_LABELS: Record<(typeof REQUIRED_DOCUMENT_TYPES)[number], string> = {
+  FSSAI: 'Upload your FSSAI licence',
+  KITCHEN_PHOTO_FRONT: 'Upload a front-view photo of your kitchen',
+  KITCHEN_PHOTO_MAIN: 'Upload a photo of your main kitchen',
+};

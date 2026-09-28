@@ -14,6 +14,7 @@ export const MEAL_CARD_SELECT = Prisma.validator<Prisma.MealSelect>()({
   price: true,
   mrp: true,
   foodType: true,
+  isJainAvailable: true,
   goalTags: true,
   slots: true,
   calories: true,
@@ -36,6 +37,20 @@ export const MEAL_CARD_SELECT = Prisma.validator<Prisma.MealSelect>()({
       opensAt: true,
       closesAt: true,
       isAcceptingOrders: true,
+      // Weekly schedule only — this "Open Now" pill is a discovery-display
+      // convenience, not the order-placement gate (that's cart/orders
+      // service, which also checks today's holiday override). Skipping the
+      // holiday-override lookup here keeps this hot read-path to one query.
+      operatingHours: {
+        select: {
+          dayOfWeek: true,
+          isClosed: true,
+          session1Start: true,
+          session1End: true,
+          session2Start: true,
+          session2End: true,
+        },
+      },
     },
   },
   category: { select: { id: true, slug: true, name: true } },
@@ -59,6 +74,16 @@ export const NEARBY_KITCHEN_SELECT = Prisma.validator<Prisma.KitchenSelect>()({
   isAcceptingOrders: true,
   latitude: true,
   longitude: true,
+  operatingHours: {
+    select: {
+      dayOfWeek: true,
+      isClosed: true,
+      session1Start: true,
+      session1End: true,
+      session2Start: true,
+      session2End: true,
+    },
+  },
 });
 
 export const MEAL_DETAIL_SELECT = Prisma.validator<Prisma.MealSelect>()({
@@ -96,7 +121,11 @@ export type MealDetailRow = Prisma.MealGetPayload<{ select: typeof MEAL_DETAIL_S
 export function toMealCard(meal: MealCardRow, favouriteMealIds: Set<string> = new Set()) {
   const kitchenOpen =
     meal.kitchen.isAcceptingOrders &&
-    isKitchenOpenNow(meal.kitchen.opensAt, meal.kitchen.closesAt);
+    isKitchenOpenNow({
+      opensAt: meal.kitchen.opensAt,
+      closesAt: meal.kitchen.closesAt,
+      operatingHours: meal.kitchen.operatingHours,
+    });
 
   return {
     id: meal.id,
@@ -112,6 +141,7 @@ export function toMealCard(meal: MealCardRow, favouriteMealIds: Set<string> = ne
         ? Math.round(((meal.mrp - meal.price) / meal.mrp) * 100)
         : 0,
     foodType: meal.foodType,
+    isJainAvailable: meal.isJainAvailable,
     goalTags: meal.goalTags,
     slots: meal.slots,
     nutrition: {

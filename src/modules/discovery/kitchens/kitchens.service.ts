@@ -2,7 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { Paginated, paginate, toSkip } from '../../../common/dto/pagination.dto';
-import { isKitchenOpenNow } from '../../../common/utils/kitchen';
+import { getIstTodayDateOnly, isKitchenOpenNow } from '../../../common/utils/kitchen';
 import { MEAL_CARD_SELECT, toMealCard } from '../meals/meals.selectors';
 import { KitchenQueryDto, KitchenSortBy } from './dto/kitchens.dto';
 
@@ -23,7 +23,32 @@ const KITCHEN_CARD_SELECT = Prisma.validator<Prisma.KitchenSelect>()({
   opensAt: true,
   closesAt: true,
   isAcceptingOrders: true,
+  operatingHours: {
+    select: {
+      dayOfWeek: true,
+      isClosed: true,
+      session1Start: true,
+      session1End: true,
+      session2Start: true,
+      session2End: true,
+    },
+  },
 });
+
+/** Today's holiday override only — re-evaluated per request, not cached at module load. */
+function todayHolidayOverrideSelect() {
+  return {
+    where: { date: getIstTodayDateOnly() },
+    take: 1,
+    select: {
+      isClosed: true,
+      session1Start: true,
+      session1End: true,
+      session2Start: true,
+      session2End: true,
+    },
+  } satisfies Prisma.KitchenHolidayOverrideFindManyArgs;
+}
 
 @Injectable()
 export class KitchensService {
@@ -55,6 +80,7 @@ export class KitchensService {
         where,
         select: {
           ...KITCHEN_CARD_SELECT,
+          holidayOverrides: todayHolidayOverrideSelect(),
           // One signature dish per card, exactly what the Home rail renders.
           meals: {
             where: { isAvailable: true },
@@ -88,6 +114,7 @@ export class KitchensService {
       where: { status: 'ACTIVE', OR: [{ id: idOrSlug }, { slug: idOrSlug }] },
       select: {
         ...KITCHEN_CARD_SELECT,
+        holidayOverrides: todayHolidayOverrideSelect(),
         description: true,
         addressLine: true,
         state: true,
@@ -227,7 +254,11 @@ export class KitchensService {
         orderBy: { createdAt: 'desc' },
         skip: toSkip(page, limit),
         take: limit,
-        select: { kitchen: { select: KITCHEN_CARD_SELECT } },
+        select: {
+          kitchen: {
+            select: { ...KITCHEN_CARD_SELECT, holidayOverrides: todayHolidayOverrideSelect() },
+          },
+        },
       }),
       this.prisma.kitchenFollow.count({ where }),
     ]);
@@ -246,7 +277,13 @@ export class KitchensService {
 
   private toKitchenCard(kitchen: any) {
     const isOpenNow =
-      kitchen.isAcceptingOrders && isKitchenOpenNow(kitchen.opensAt, kitchen.closesAt);
+      kitchen.isAcceptingOrders &&
+      isKitchenOpenNow({
+        opensAt: kitchen.opensAt,
+        closesAt: kitchen.closesAt,
+        operatingHours: kitchen.operatingHours,
+        holidayOverride: kitchen.holidayOverrides?.[0] ?? null,
+      });
 
     return {
       id: kitchen.id,

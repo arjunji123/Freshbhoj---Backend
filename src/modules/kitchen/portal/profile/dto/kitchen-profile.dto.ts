@@ -1,4 +1,5 @@
 import {
+  ArrayMaxSize,
   IsArray,
   IsBoolean,
   IsInt,
@@ -75,6 +76,24 @@ export class UpdateKitchenProfileDto {
   @IsArray()
   @IsString({ each: true })
   cuisineSlugs?: string[];
+
+  @ApiPropertyOptional({
+    type: [String],
+    example: ['North Indian', 'Home-style', 'Jain'],
+    description: 'Free-text cuisine/theme tags shown on the kitchen profile',
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(10)
+  @IsString({ each: true })
+  specialities?: string[];
+
+  @ApiPropertyOptional({ example: 40, description: 'Max concurrent orders this kitchen can comfortably handle' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  capacity?: number;
 }
 
 /**

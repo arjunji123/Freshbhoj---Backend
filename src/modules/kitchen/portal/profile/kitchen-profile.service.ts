@@ -48,6 +48,8 @@ export class KitchenProfileService {
         ...(dto.prepTimeMins !== undefined && { prepTimeMins: dto.prepTimeMins }),
         ...(dto.opensAt !== undefined && { opensAt: dto.opensAt }),
         ...(dto.closesAt !== undefined && { closesAt: dto.closesAt }),
+        ...(dto.specialities !== undefined && { specialities: dto.specialities }),
+        ...(dto.capacity !== undefined && { capacity: dto.capacity }),
       },
     });
 
@@ -104,6 +106,8 @@ export class KitchenProfileService {
       fssaiLicense: kitchen.fssaiLicense,
       hygieneScore: kitchen.hygieneScore,
       cuisines: cuisines.map((c) => c.slug),
+      specialities: kitchen.specialities,
+      capacity: kitchen.capacity,
       createdAt: kitchen.createdAt,
     };
   }

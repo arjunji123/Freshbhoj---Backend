@@ -10,6 +10,7 @@ export enum KitchenUploadPurpose {
   DOCUMENT = 'DOCUMENT',
   REEL_VIDEO = 'REEL_VIDEO',
   REEL_THUMBNAIL = 'REEL_THUMBNAIL',
+  FSSAI_ASSISTANCE_DOCUMENT = 'FSSAI_ASSISTANCE_DOCUMENT',
 }
 
 export class KitchenUploadDto {

@@ -54,6 +54,14 @@ export class AddCartItemDto {
   @IsOptional()
   @IsUUID()
   sourceStoryId?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Set when this add-to-cart came from tapping a shoppable Reel — attributes the eventual order back to it.',
+  })
+  @IsOptional()
+  @IsUUID()
+  sourceReelId?: string;
 }
 
 export class UpdateCartItemDto {

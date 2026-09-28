@@ -1,7 +1,9 @@
 import { BadRequestException, ConflictException, Injectable, Logger } from '@nestjs/common';
 import {
+  FssaiAssistanceStatus,
   KitchenAccount,
   KitchenAccountStatus,
+  KitchenDocumentType,
   KitchenOnboardingStep,
   KitchenStatus,
 } from '@prisma/client';
@@ -13,7 +15,12 @@ import {
   OwnerDetailsDto,
   UploadDocumentDto,
 } from './dto/onboarding.dto';
-import { ONBOARDING_STEPS, REQUIRED_DOCUMENT_TYPES, STEP_ORDER } from './onboarding.constants';
+import {
+  ONBOARDING_STEPS,
+  REQUIRED_DOCUMENT_LABELS,
+  REQUIRED_DOCUMENT_TYPES,
+  STEP_ORDER,
+} from './onboarding.constants';
 
 @Injectable()
 export class OnboardingService {
@@ -29,7 +36,16 @@ export class OnboardingService {
     const account = await this.prisma.kitchenAccount.findUniqueOrThrow({
       where: { id: accountId },
       include: {
-        kitchen: { select: { id: true, name: true, latitude: true, _count: { select: { meals: true } } } },
+        kitchen: {
+          select: {
+            id: true,
+            name: true,
+            kitchenType: true,
+            latitude: true,
+            serviceRadiusKm: true,
+            _count: { select: { meals: true } },
+          },
+        },
         documents: true,
         bankAccount: true,
       },
@@ -39,10 +55,27 @@ export class OnboardingService {
 
     const pending: string[] = [];
     if (!account.ownerName) pending.push('Add the owner’s name');
-    if (!account.kitchen) pending.push('Add your kitchen’s name and photos');
+    if (!account.kitchen) pending.push('Add your kitchen’s name');
+    if (account.kitchen && !account.kitchen.kitchenType) pending.push('Choose your kitchen type');
     if (account.kitchen && account.kitchen.latitude === null) pending.push('Set your kitchen location');
-    const hasFssai = account.documents.some((d) => REQUIRED_DOCUMENT_TYPES.includes(d.type as any));
-    if (!hasFssai) pending.push('Upload your FSSAI licence');
+    if (account.kitchen && account.kitchen.serviceRadiusKm === null) pending.push('Set your service radius');
+    const uploadedTypes = new Set(account.documents.map((d) => d.type));
+    // A partner without their own FSSAI licence can ask FreshBhoj to file it
+    // for them instead of uploading one — an active (non-terminal) assistance
+    // request satisfies the FSSAI requirement in place of an uploaded file.
+    const hasActiveFssaiAssistance = await this.prisma.fssaiAssistanceRequest.findFirst({
+      where: {
+        accountId,
+        status: { notIn: [FssaiAssistanceStatus.REJECTED, FssaiAssistanceStatus.CANCELLED] },
+      },
+      select: { id: true },
+    });
+    for (const type of REQUIRED_DOCUMENT_TYPES) {
+      const satisfied =
+        uploadedTypes.has(type) ||
+        (type === KitchenDocumentType.FSSAI && Boolean(hasActiveFssaiAssistance));
+      if (!satisfied) pending.push(REQUIRED_DOCUMENT_LABELS[type]);
+    }
     if (!account.bankAccount) pending.push('Add your bank details for payouts');
     if ((account.kitchen?._count.meals ?? 0) === 0) pending.push('Add at least one dish');
 
@@ -124,6 +157,7 @@ export class OnboardingService {
 
     const data = {
       name: dto.name,
+      kitchenType: dto.kitchenType,
       tagline: dto.tagline,
       description: dto.description,
       logoUrl: dto.logoUrl,
@@ -171,6 +205,7 @@ export class OnboardingService {
         pincode: dto.pincode,
         latitude: dto.latitude,
         longitude: dto.longitude,
+        serviceRadiusKm: dto.serviceRadiusKm,
       },
     });
 
@@ -200,7 +235,20 @@ export class OnboardingService {
       }
     }
 
-    await this.setStep(accountId, KitchenOnboardingStep.DOCUMENTS);
+    // The DOCUMENTS step covers several required uploads (FSSAI + 2 kitchen
+    // photos), so only advance past it once every required type is in —
+    // otherwise the client would be routed to the next step (bank details)
+    // after just the first upload, with no way back to finish the rest.
+    const uploaded = await this.prisma.kitchenDocument.findMany({
+      where: { accountId },
+      select: { type: true },
+    });
+    const uploadedTypes = new Set(uploaded.map((d) => d.type));
+    const hasAllRequired = REQUIRED_DOCUMENT_TYPES.every((type) => uploadedTypes.has(type));
+    if (hasAllRequired) {
+      await this.setStep(accountId, KitchenOnboardingStep.DOCUMENTS);
+    }
+
     return this.getStatus(accountId);
   }
 

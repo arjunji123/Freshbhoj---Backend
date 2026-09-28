@@ -32,6 +32,14 @@ export class DashboardAllTimeDto {
   activeMealCount: number;
 }
 
+export class DashboardWeeklyRevenueDto {
+  @ApiProperty({ example: '2026-09-22', description: 'IST calendar date, YYYY-MM-DD' })
+  date: string;
+
+  @ApiProperty({ example: 4200, description: 'Delivered-order revenue for that day' })
+  revenue: number;
+}
+
 export class DashboardSummaryDto {
   @ApiProperty({ enum: KitchenAccountStatus, example: KitchenAccountStatus.ACTIVE })
   accountStatus: KitchenAccountStatus;
@@ -44,6 +52,12 @@ export class DashboardSummaryDto {
 
   @ApiProperty({ type: DashboardAllTimeDto })
   allTime: DashboardAllTimeDto;
+
+  @ApiProperty({
+    type: [DashboardWeeklyRevenueDto],
+    description: 'Last 7 IST calendar days, oldest first, today last',
+  })
+  weeklyRevenue: DashboardWeeklyRevenueDto[];
 
   @ApiPropertyOptional({
     nullable: true,

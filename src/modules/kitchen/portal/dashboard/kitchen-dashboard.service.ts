@@ -16,15 +16,11 @@ export class KitchenDashboardService {
     const kitchen = await this.prisma.kitchen.findUnique({ where: { accountId } });
     if (!kitchen) throw new BadRequestException('Complete onboarding to create your kitchen first');
 
-    // "Today" must mean the IST calendar day regardless of the server
-    // process's local timezone (Vercel runs UTC, so a naive setHours(0,0,0,0)
-    // would start "today" at 5:30am IST) — same correction as
-    // `isKitchenOpenNow` in common/utils/kitchen.ts.
-    const now = new Date();
-    const istNow = new Date(now.getTime() + (330 + now.getTimezoneOffset()) * 60_000);
-    const startOfDayIst = new Date(istNow);
-    startOfDayIst.setHours(0, 0, 0, 0);
-    const startOfDay = new Date(startOfDayIst.getTime() - (330 + now.getTimezoneOffset()) * 60_000);
+    const { start: startOfDay } = this.getIstDayBounds(0);
+
+    const weeklyRevenueDays = Array.from({ length: 7 }, (_, i) => 6 - i).map((daysAgo) =>
+      this.getIstDayBounds(daysAgo),
+    );
 
     const [
       todayOrders,
@@ -32,6 +28,7 @@ export class KitchenDashboardService {
       allTimeAgg,
       activeMealCount,
       pendingDocument,
+      ...weeklyRevenueAggs
     ] = await Promise.all([
       this.prisma.order.findMany({
         where: { kitchenId: kitchen.id, createdAt: { gte: startOfDay } },
@@ -50,6 +47,12 @@ export class KitchenDashboardService {
         where: { accountId, status: 'REJECTED' },
         select: { type: true, remarks: true },
       }),
+      ...weeklyRevenueDays.map(({ start, end }) =>
+        this.prisma.order.aggregate({
+          where: { kitchenId: kitchen.id, status: OrderStatus.DELIVERED, createdAt: { gte: start, lt: end } },
+          _sum: { totalAmount: true },
+        }),
+      ),
     ]);
 
     const actionNeeded = pendingDocument
@@ -72,7 +75,37 @@ export class KitchenDashboardService {
         followerCount: kitchen.followerCount,
         activeMealCount,
       },
+      weeklyRevenue: weeklyRevenueDays.map(({ start }, i) => ({
+        date: this.toIstDateString(start),
+        revenue: weeklyRevenueAggs[i]._sum.totalAmount ?? 0,
+      })),
       actionNeeded,
     };
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // INTERNAL
+  // ──────────────────────────────────────────────────────────────────────────
+
+  /**
+   * The IST calendar day `daysAgo` days back, as a UTC instant range —
+   * correct regardless of the server process's own timezone (Vercel runs
+   * UTC, so a naive `setHours(0,0,0,0)` would start "today" at 5:30am IST).
+   * Same correction as `isKitchenOpenNow` in `common/utils/kitchen.ts`.
+   */
+  private getIstDayBounds(daysAgo: number): { start: Date; end: Date } {
+    const now = new Date();
+    const istNow = new Date(now.getTime() + (330 + now.getTimezoneOffset()) * 60_000);
+    const startOfDayIst = new Date(istNow);
+    startOfDayIst.setHours(0, 0, 0, 0);
+    startOfDayIst.setDate(startOfDayIst.getDate() - daysAgo);
+    const start = new Date(startOfDayIst.getTime() - (330 + now.getTimezoneOffset()) * 60_000);
+    const end = new Date(start.getTime() + 24 * 60 * 60_000);
+    return { start, end };
+  }
+
+  private toIstDateString(startOfDayUtc: Date): string {
+    const istInstant = new Date(startOfDayUtc.getTime() + 330 * 60_000);
+    return istInstant.toISOString().slice(0, 10);
   }
 }

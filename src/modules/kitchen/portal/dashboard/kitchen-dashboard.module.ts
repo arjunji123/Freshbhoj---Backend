@@ -5,5 +5,6 @@ import { KitchenDashboardService } from './kitchen-dashboard.service';
 @Module({
   controllers: [KitchenDashboardController],
   providers: [KitchenDashboardService],
+  exports: [KitchenDashboardService],
 })
 export class KitchenDashboardModule {}

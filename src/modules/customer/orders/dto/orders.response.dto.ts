@@ -306,6 +306,9 @@ export class OrderTrackingDto {
 
   @ApiProperty({ type: OrderSupportDto })
   support: OrderSupportDto;
+
+  @ApiProperty({ example: false, description: 'Whether the kitchen has sent a message you have not yet read' })
+  hasUnreadKitchenMessages: boolean;
 }
 
 export class ReorderResultDto {

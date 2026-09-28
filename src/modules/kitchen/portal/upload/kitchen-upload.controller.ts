@@ -19,7 +19,7 @@ import { ApiEnvelope, ApiEnvelopeError } from '../../../../common/decorators/api
 import { KitchenUploadDto, KitchenUploadPurpose } from './dto/kitchen-upload.dto';
 import { KitchenUploadResultDto } from './dto/kitchen-upload.response.dto';
 
-const ALLOWED_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.webp', '.mp4', '.mov', '.webm'];
+const ALLOWED_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.webp', '.mp4', '.mov', '.webm', '.pdf'];
 
 /**
  * One shared upload endpoint for every kitchen media need — menu photos, story
@@ -61,7 +61,12 @@ export class KitchenUploadController {
         if (ALLOWED_EXTENSIONS.includes(ext)) {
           cb(null, true);
         } else {
-          cb(new BadRequestException('Only JPG, PNG, WEBP images or MP4, MOV, WEBM videos are allowed'), false);
+          cb(
+            new BadRequestException(
+              'Only JPG, PNG, WEBP images, MP4, MOV, WEBM videos, or PDF documents are allowed',
+            ),
+            false,
+          );
         }
       },
     }),

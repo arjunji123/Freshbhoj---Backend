@@ -1,7 +1,8 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma, ReelStatus } from '@prisma/client';
+import { Prisma, ReelCampaignStatus, ReelStatus } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { Paginated, paginate, toSkip } from '../../../common/dto/pagination.dto';
+import { getIstTodayDateOnly } from '../../../common/utils/kitchen';
 import { ReelFeedQueryDto, ReelFeedType } from './dto/reels.dto';
 
 const REEL_SELECT = Prisma.validator<Prisma.ReelSelect>()({
@@ -58,6 +59,7 @@ export class ReelsService {
 
     const where: Prisma.ReelWhereInput = {
       status: ReelStatus.PUBLISHED,
+      isPaused: false,
       kitchen: { status: 'ACTIVE' },
       ...(query.kitchenId && { kitchenId: query.kitchenId }),
       ...(query.cuisineId && { meal: { cuisineId: query.cuisineId } }),
@@ -95,6 +97,7 @@ export class ReelsService {
     ]);
 
     const engagement = await this.getEngagement(userId, rows.map((r) => r.id));
+    await this.trackImpressions(rows.map((r) => r.id));
 
     return paginate(rows.map((r) => this.toReel(r, engagement)), page, limit, total);
   }
@@ -102,13 +105,14 @@ export class ReelsService {
   async findOne(reelId: string, userId?: string) {
     const reel = await this.prisma.reel.findFirst({
       // Same visibility rule as the feed — a reel from a kitchen that isn't
-      // ACTIVE must not be reachable by id.
-      where: { id: reelId, kitchen: { status: 'ACTIVE' } },
+      // ACTIVE, or one the kitchen has paused, must not be reachable by id.
+      where: { id: reelId, isPaused: false, kitchen: { status: 'ACTIVE' } },
       select: REEL_SELECT,
     });
     if (!reel) throw new NotFoundException('Reel not found');
 
     const engagement = await this.getEngagement(userId, [reel.id]);
+    await this.trackImpressions([reel.id]);
     return this.toReel(reel, engagement);
   }
 
@@ -172,6 +176,7 @@ export class ReelsService {
       where: { id: reelId },
       data: { viewCount: { increment: 1 } },
     });
+    await this.trackClick(reelId);
     return { reelId, recorded: true };
   }
 
@@ -288,5 +293,45 @@ export class ReelsService {
   private async assertExists(reelId: string) {
     const exists = await this.prisma.reel.findUnique({ where: { id: reelId }, select: { id: true } });
     if (!exists) throw new NotFoundException('Reel not found');
+  }
+
+  /** Bumps today's impression count for any served reel that has an ACTIVE ad campaign. */
+  private async trackImpressions(reelIds: string[]) {
+    if (!reelIds.length) return;
+    const campaigns = await this.prisma.reelCampaign.findMany({
+      where: { reelId: { in: reelIds }, status: ReelCampaignStatus.ACTIVE },
+      select: { id: true },
+    });
+    if (!campaigns.length) return;
+
+    const date = getIstTodayDateOnly();
+    await this.prisma.$transaction(
+      campaigns.map((c) =>
+        this.prisma.reelCampaignDailyStat.upsert({
+          where: { campaignId_date: { campaignId: c.id, date } },
+          update: { impressions: { increment: 1 } },
+          create: { campaignId: c.id, date, impressions: 1 },
+        }),
+      ),
+    );
+  }
+
+  /**
+   * A reel has no separate "tap" affordance distinct from watching, so an
+   * explicit view (`recordView`) is the closest honest CTR analog to a click.
+   */
+  private async trackClick(reelId: string) {
+    const campaign = await this.prisma.reelCampaign.findFirst({
+      where: { reelId, status: ReelCampaignStatus.ACTIVE },
+      select: { id: true },
+    });
+    if (!campaign) return;
+
+    const date = getIstTodayDateOnly();
+    await this.prisma.reelCampaignDailyStat.upsert({
+      where: { campaignId_date: { campaignId: campaign.id, date } },
+      update: { clicks: { increment: 1 } },
+      create: { campaignId: campaign.id, date, clicks: 1 },
+    });
   }
 }

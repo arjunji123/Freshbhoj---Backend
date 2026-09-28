@@ -2,7 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { Paginated, paginate, toSkip } from '../../../common/dto/pagination.dto';
-import { boundingBox, formatDistance, haversineKm, isKitchenOpenNow } from '../../../common/utils/kitchen';
+import { boundingBox, formatDistance, haversineKm } from '../../../common/utils/kitchen';
 import { MealQueryDto, MealSortBy, TrendingNearbyQueryDto } from './dto/meals.dto';
 import {
   MEAL_CARD_SELECT,
@@ -272,7 +272,4 @@ export class MealsService {
     });
     return new Set(favorites.map((f) => f.mealId));
   }
-
-  /** Shared with CartService/OrdersService for the open-now guard. */
-  static isKitchenOpen = isKitchenOpenNow;
 }

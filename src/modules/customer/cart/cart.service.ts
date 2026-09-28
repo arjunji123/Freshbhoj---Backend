@@ -9,46 +9,74 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { CouponsService } from '../../platform/coupons/coupons.service';
 import { ReferralService } from '../../platform/referral/referral.service';
 import { buildPriceBreakdown, PRICING } from '../../../common/utils/pricing';
-import { isKitchenOpenNow } from '../../../common/utils/kitchen';
+import { getIstTodayDateOnly, isKitchenOpenNow } from '../../../common/utils/kitchen';
 import { AddCartItemDto, UpdateCartItemDto } from './dto/cart.dto';
 
-const CART_ITEM_INCLUDE = Prisma.validator<Prisma.CartItemInclude>()({
-  meal: {
-    select: {
-      id: true,
-      name: true,
-      images: true,
-      price: true,
-      mrp: true,
-      foodType: true,
-      calories: true,
-      proteinG: true,
-      isAvailable: true,
-      kitchen: {
-        select: {
-          id: true,
-          name: true,
-          slug: true,
-          logoUrl: true,
-          isVerified: true,
-          prepTimeMins: true,
-          opensAt: true,
-          closesAt: true,
-          isAcceptingOrders: true,
+/**
+ * A function, not a static const, because the kitchen's holiday override
+ * needs *today's* date — re-evaluated fresh on every call, not cached at
+ * module load.
+ */
+function cartItemInclude() {
+  return Prisma.validator<Prisma.CartItemInclude>()({
+    meal: {
+      select: {
+        id: true,
+        name: true,
+        images: true,
+        price: true,
+        mrp: true,
+        foodType: true,
+        calories: true,
+        proteinG: true,
+        isAvailable: true,
+        kitchen: {
+          select: {
+            id: true,
+            name: true,
+            slug: true,
+            logoUrl: true,
+            isVerified: true,
+            prepTimeMins: true,
+            opensAt: true,
+            closesAt: true,
+            isAcceptingOrders: true,
+            operatingHours: {
+              select: {
+                dayOfWeek: true,
+                isClosed: true,
+                session1Start: true,
+                session1End: true,
+                session2Start: true,
+                session2End: true,
+              },
+            },
+            holidayOverrides: {
+              where: { date: getIstTodayDateOnly() },
+              take: 1,
+              select: {
+                isClosed: true,
+                session1Start: true,
+                session1End: true,
+                session2Start: true,
+                session2End: true,
+              },
+            },
+          },
         },
-      },
-      customizationGroups: {
-        select: {
-          id: true,
-          name: true,
-          options: { select: { id: true, name: true, priceDelta: true } },
+        customizationGroups: {
+          select: {
+            id: true,
+            name: true,
+            options: { select: { id: true, name: true, priceDelta: true } },
+          },
         },
       },
     },
-  },
-});
+  });
+}
 
-type CartItemRow = Prisma.CartItemGetPayload<{ include: typeof CART_ITEM_INCLUDE }>;
+type CartItemRow = Prisma.CartItemGetPayload<{ include: ReturnType<typeof cartItemInclude> }>;
 
 @Injectable()
 export class CartService {
@@ -67,7 +95,7 @@ export class CartService {
     const cart = await this.ensureCart(userId);
     const items = await this.prisma.cartItem.findMany({
       where: { cartId: cart.id },
-      include: CART_ITEM_INCLUDE,
+      include: cartItemInclude(),
       orderBy: { createdAt: 'asc' },
     });
 
@@ -126,7 +154,7 @@ export class CartService {
       await this.prisma.cartItem.deleteMany({ where: { cartId: cart.id } });
       await this.prisma.cart.update({
         where: { id: cart.id },
-        data: { couponCode: null, coinsToRedeem: 0, sourceStoryId: null },
+        data: { couponCode: null, coinsToRedeem: 0, sourceStoryId: null, sourceReelId: null },
       });
     }
 
@@ -163,11 +191,14 @@ export class CartService {
 
     // Most-recent-story-wins: a customer who bounces between a couple of
     // shoppable stories before checking out gets attributed to whichever one
-    // they actually acted on last.
-    if (dto.sourceStoryId) {
+    // they actually acted on last. Same rule for reels, independently.
+    if (dto.sourceStoryId || dto.sourceReelId) {
       await this.prisma.cart.update({
         where: { id: cart.id },
-        data: { sourceStoryId: dto.sourceStoryId },
+        data: {
+          ...(dto.sourceStoryId && { sourceStoryId: dto.sourceStoryId }),
+          ...(dto.sourceReelId && { sourceReelId: dto.sourceReelId }),
+        },
       });
     }
 
@@ -207,7 +238,7 @@ export class CartService {
       this.prisma.cartItem.deleteMany({ where: { cartId: cart.id } }),
       this.prisma.cart.update({
         where: { id: cart.id },
-        data: { couponCode: null, coinsToRedeem: 0, sourceStoryId: null },
+        data: { couponCode: null, coinsToRedeem: 0, sourceStoryId: null, sourceReelId: null },
       }),
     ]);
     return this.getCart(userId);
@@ -287,7 +318,7 @@ export class CartService {
     const cart = await this.ensureCart(userId);
     return this.prisma.cartItem.findMany({
       where: { cartId: cart.id },
-      include: CART_ITEM_INCLUDE,
+      include: cartItemInclude(),
       orderBy: { createdAt: 'asc' },
     });
   }
@@ -363,7 +394,12 @@ export class CartService {
           prepTimeMins: kitchenRow.prepTimeMins,
           isOpenNow:
             kitchenRow.isAcceptingOrders &&
-            isKitchenOpenNow(kitchenRow.opensAt, kitchenRow.closesAt),
+            isKitchenOpenNow({
+              opensAt: kitchenRow.opensAt,
+              closesAt: kitchenRow.closesAt,
+              operatingHours: kitchenRow.operatingHours,
+              holidayOverride: kitchenRow.holidayOverrides?.[0] ?? null,
+            }),
         }
       : null;
 

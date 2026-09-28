@@ -23,7 +23,16 @@ export class KitchenReelsService {
       include: { meal: { select: { name: true } } },
     });
 
-    return reels.map((reel) => this.toDto(reel));
+    // Live count, not denormalised — same mechanism as
+    // `KitchenStoriesService.list()`, keyed on sourceReelId instead.
+    const orderCounts = await this.prisma.order.groupBy({
+      by: ['sourceReelId'],
+      where: { sourceReelId: { in: reels.map((r) => r.id) } },
+      _count: { _all: true },
+    });
+    const orderCountByReel = new Map(orderCounts.map((row) => [row.sourceReelId, row._count._all]));
+
+    return reels.map((reel) => this.toDto(reel, orderCountByReel.get(reel.id) ?? 0));
   }
 
   async publish(accountId: string, dto: PublishReelDto) {
@@ -70,7 +79,8 @@ export class KitchenReelsService {
       include: { meal: { select: { name: true } } },
     });
 
-    return this.toDto(reel);
+    const orderCount = await this.prisma.order.count({ where: { sourceReelId: reelId } });
+    return this.toDto(reel, orderCount);
   }
 
   /** Pull a reel down — the dish sold out, or it was posted by mistake. */
@@ -80,6 +90,45 @@ export class KitchenReelsService {
 
     await this.prisma.reel.update({ where: { id: reelId }, data: { status: ReelStatus.ARCHIVED } });
     return { id: reelId };
+  }
+
+  /**
+   * Temporarily hide a reel from the public feed without archiving it —
+   * resumable, unlike `archive`. `ReelsService.getFeed`/`findOne` (discovery
+   * module) filter on `isPaused: false` alongside `status: PUBLISHED`.
+   */
+  async pause(accountId: string, reelId: string) {
+    const kitchen = await this.requireKitchen(accountId);
+    await this.assertOwned(kitchen.id, reelId);
+
+    await this.prisma.reel.update({ where: { id: reelId }, data: { isPaused: true } });
+    return { id: reelId, isPaused: true };
+  }
+
+  async resume(accountId: string, reelId: string) {
+    const kitchen = await this.requireKitchen(accountId);
+    await this.assertOwned(kitchen.id, reelId);
+
+    await this.prisma.reel.update({ where: { id: reelId }, data: { isPaused: false } });
+    return { id: reelId, isPaused: false };
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // OPS-FACING (V0 admin tool)
+  // ──────────────────────────────────────────────────────────────────────────
+
+  /** No self-serve boost flow or spend tracking — ops flips this by hand. */
+  async adminSetSponsored(reelId: string, isSponsored: boolean) {
+    const exists = await this.prisma.reel.findUnique({ where: { id: reelId }, select: { id: true } });
+    if (!exists) throw new NotFoundException('Reel not found');
+
+    const reel = await this.prisma.reel.update({
+      where: { id: reelId },
+      data: { isSponsored },
+      include: { meal: { select: { name: true } } },
+    });
+    const orderCount = await this.prisma.order.count({ where: { sourceReelId: reelId } });
+    return this.toDto(reel, orderCount);
   }
 
   private async assertOwned(kitchenId: string, reelId: string) {
@@ -97,22 +146,27 @@ export class KitchenReelsService {
     return kitchen;
   }
 
-  private toDto(reel: {
-    id: string;
-    videoUrl: string;
-    thumbnailUrl: string | null;
-    caption: string | null;
-    hashtags: string[];
-    durationSec: number;
-    status: ReelStatus;
-    viewCount: number;
-    likeCount: number;
-    shareCount: number;
-    commentCount: number;
-    publishedAt: Date;
-    createdAt: Date;
-    meal?: { name: string } | null;
-  }) {
+  private toDto(
+    reel: {
+      id: string;
+      videoUrl: string;
+      thumbnailUrl: string | null;
+      caption: string | null;
+      hashtags: string[];
+      durationSec: number;
+      status: ReelStatus;
+      isPaused: boolean;
+      isSponsored: boolean;
+      viewCount: number;
+      likeCount: number;
+      shareCount: number;
+      commentCount: number;
+      publishedAt: Date;
+      createdAt: Date;
+      meal?: { name: string } | null;
+    },
+    orderCount = 0,
+  ) {
     return {
       id: reel.id,
       videoUrl: reel.videoUrl,
@@ -121,10 +175,13 @@ export class KitchenReelsService {
       hashtags: reel.hashtags,
       durationSec: reel.durationSec,
       status: reel.status,
+      isPaused: reel.isPaused,
+      isSponsored: reel.isSponsored,
       viewCount: reel.viewCount,
       likeCount: reel.likeCount,
       shareCount: reel.shareCount,
       commentCount: reel.commentCount,
+      orderCount,
       mealName: reel.meal?.name ?? null,
       publishedAt: reel.publishedAt,
       createdAt: reel.createdAt,

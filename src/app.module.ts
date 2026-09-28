@@ -22,6 +22,7 @@ import { CartModule } from './modules/customer/cart/cart.module';
 import { OrdersModule } from './modules/customer/orders/orders.module';
 import { WishlistModule } from './modules/customer/wishlist/wishlist.module';
 import { PaymentMethodsModule } from './modules/customer/payment-methods/payment-methods.module';
+import { SubscriptionsModule } from './modules/customer/subscriptions/subscriptions.module';
 
 // ── Discovery (browsable catalogue) ─────────────────────────────────────────
 import { CatalogModule } from './modules/discovery/catalog/catalog.module';
@@ -42,6 +43,14 @@ import { KitchenStoriesModule } from './modules/kitchen/portal/stories/kitchen-s
 import { KitchenDashboardModule } from './modules/kitchen/portal/dashboard/kitchen-dashboard.module';
 import { KitchenUploadModule } from './modules/kitchen/portal/upload/kitchen-upload.module';
 import { KitchenReelsModule } from './modules/kitchen/portal/reels/kitchen-reels.module';
+import { FssaiAssistanceModule } from './modules/kitchen/portal/fssai-assistance/fssai-assistance.module';
+import { BhojAiModule } from './modules/kitchen/portal/bhojai/bhojai.module';
+import { NotificationsModule } from './modules/kitchen/portal/notifications/notifications.module';
+import { PayoutsModule } from './modules/kitchen/portal/payouts/payouts.module';
+import { OperatingHoursModule } from './modules/kitchen/portal/operating-hours/operating-hours.module';
+import { KitchenAdsModule } from './modules/kitchen/portal/ads/kitchen-ads.module';
+import { KitchenSubscriptionsModule } from './modules/kitchen/portal/subscriptions/kitchen-subscriptions.module';
+import { OrderChatModule } from './modules/kitchen/portal/order-chat/order-chat.module';
 
 // ── Platform ────────────────────────────────────────────────────────────────
 import { CouponsModule } from './modules/platform/coupons/coupons.module';
@@ -88,6 +97,7 @@ import geminiConfig from './config/gemini.config';
     StoriesModule,
     WishlistModule,
     PaymentMethodsModule,
+    SubscriptionsModule,
     SupportModule,
     ReferralModule,
     // HomeModule aggregates the modules above, so it is registered last.
@@ -104,6 +114,14 @@ import geminiConfig from './config/gemini.config';
     KitchenDashboardModule,
     KitchenUploadModule,
     KitchenReelsModule,
+    FssaiAssistanceModule,
+    BhojAiModule,
+    NotificationsModule,
+    PayoutsModule,
+    OperatingHoursModule,
+    KitchenAdsModule,
+    KitchenSubscriptionsModule,
+    OrderChatModule,
   ],
   controllers: [AppController],
   providers: [

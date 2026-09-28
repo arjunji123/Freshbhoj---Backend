@@ -19,6 +19,8 @@ import { CartService } from '../cart/cart.service';
 import { CouponsService } from '../../platform/coupons/coupons.service';
 import { ReferralService } from '../../platform/referral/referral.service';
 import { AddressesService } from '../addresses/addresses.service';
+import { NotificationsService } from '../../kitchen/portal/notifications/notifications.service';
+import { OrderMessagesService } from './order-messages.service';
 import { buildPriceBreakdown, generateOrderNumber, PRICING } from '../../../common/utils/pricing';
 import { isKitchenOpenNow } from '../../../common/utils/kitchen';
 import { Paginated, paginate, toSkip } from '../../../common/dto/pagination.dto';
@@ -66,6 +68,8 @@ export class OrdersService {
     private readonly couponsService: CouponsService,
     private readonly referralService: ReferralService,
     private readonly addressesService: AddressesService,
+    private readonly notificationsService: NotificationsService,
+    private readonly orderMessagesService: OrderMessagesService,
   ) {}
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -84,7 +88,13 @@ export class OrdersService {
     }
 
     const kitchen = items[0].meal.kitchen;
-    if (!kitchen.isAcceptingOrders || !isKitchenOpenNow(kitchen.opensAt, kitchen.closesAt)) {
+    const kitchenOpen = isKitchenOpenNow({
+      opensAt: kitchen.opensAt,
+      closesAt: kitchen.closesAt,
+      operatingHours: kitchen.operatingHours,
+      holidayOverride: kitchen.holidayOverrides?.[0] ?? null,
+    });
+    if (!kitchen.isAcceptingOrders || !kitchenOpen) {
       throw new BadRequestException(`${kitchen.name} is not accepting orders right now`);
     }
 
@@ -144,6 +154,7 @@ export class OrdersService {
           couponCode: coupon.valid ? coupon.code : null,
           coinsRedeemed: coins.redeemed,
           sourceStoryId: cart.sourceStoryId,
+          sourceReelId: cart.sourceReelId,
           paymentMethod,
           paymentStatus: isCod ? PaymentStatus.PENDING : PaymentStatus.PROCESSING,
           slotType: dto.slotType ?? DeliverySlotType.NOW,
@@ -180,7 +191,7 @@ export class OrdersService {
         await tx.cartItem.deleteMany({ where: { cartId: cart.id } });
         await tx.cart.update({
           where: { id: cart.id },
-          data: { couponCode: null, coinsToRedeem: 0, sourceStoryId: null },
+          data: { couponCode: null, coinsToRedeem: 0, sourceStoryId: null, sourceReelId: null },
         });
         if (coupon.valid && coupon.code) {
           await tx.coupon.updateMany({ where: { code: coupon.code }, data: { usedCount: { increment: 1 } } });
@@ -202,6 +213,7 @@ export class OrdersService {
     });
 
     this.logger.log(`Order ${order.orderNumber} created for user ${userId} (${status})`);
+    if (isCod) await this.notifyKitchenNewOrder(order);
     return this.toOrderDetail(order);
   }
 
@@ -236,7 +248,7 @@ export class OrdersService {
       await tx.cartItem.deleteMany({ where: { cartId: cart.id } });
       await tx.cart.update({
         where: { id: cart.id },
-        data: { couponCode: null, coinsToRedeem: 0, sourceStoryId: null },
+        data: { couponCode: null, coinsToRedeem: 0, sourceStoryId: null, sourceReelId: null },
       });
 
       if (result.couponCode) {
@@ -264,6 +276,7 @@ export class OrdersService {
       return result;
     });
 
+    await this.notifyKitchenNewOrder(updated);
     return this.toOrderDetail(updated);
   }
 
@@ -338,6 +351,7 @@ export class OrdersService {
       kitchen: detail.kitchen,
       deliveryPartner: detail.deliveryPartner,
       support: detail.support,
+      hasUnreadKitchenMessages: await this.orderMessagesService.hasUnreadKitchenMessages(order.id),
     };
   }
 
@@ -612,6 +626,24 @@ export class OrdersService {
     await tx.coinTransaction.create({
       data: { userId, amount: -amount, reason: CoinTransactionReason.ORDER_REDEMPTION },
     });
+  }
+
+  /**
+   * Best-effort in-app notification to the kitchen the moment an order goes
+   * PLACED. Never allowed to break order placement/payment — a notification
+   * failure is logged and swallowed, not surfaced to the customer.
+   */
+  private async notifyKitchenNewOrder(order: Pick<OrderRow, 'id' | 'orderNumber' | 'totalAmount' | 'kitchenId'>) {
+    try {
+      const kitchen = await this.prisma.kitchen.findUnique({
+        where: { id: order.kitchenId },
+        select: { accountId: true },
+      });
+      if (!kitchen?.accountId) return;
+      await this.notificationsService.createOrderNotification(kitchen.accountId, order);
+    } catch (err) {
+      this.logger.error(`Failed to notify kitchen of new order ${order.id}: ${err}`);
+    }
   }
 
   private async getOwnedOrder(userId: string, orderId: string): Promise<OrderRow> {

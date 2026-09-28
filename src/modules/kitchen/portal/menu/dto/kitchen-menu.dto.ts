@@ -112,6 +112,14 @@ export class UpsertMealDto {
   @IsEnum(FoodType)
   foodType: FoodType;
 
+  @ApiPropertyOptional({
+    default: false,
+    description: 'Can be prepared Jain-style (no onion/garlic/root veg) — only valid when foodType is VEG or VEGAN',
+  })
+  @IsOptional()
+  @IsBoolean()
+  isJainAvailable?: boolean;
+
   @ApiPropertyOptional({ description: 'Time-slot category slug, e.g. "lunch"' })
   @IsOptional()
   @IsString()
@@ -220,6 +228,7 @@ export class UpdateMealDto {
   @ApiPropertyOptional() @IsOptional() @Type(() => Number) @IsInt() @Min(1) price?: number;
   @ApiPropertyOptional() @IsOptional() @Type(() => Number) @IsInt() @Min(1) mrp?: number;
   @ApiPropertyOptional({ enum: FoodType }) @IsOptional() @IsEnum(FoodType) foodType?: FoodType;
+  @ApiPropertyOptional({ description: 'Only valid when foodType (existing or newly-set) is VEG or VEGAN' }) @IsOptional() @IsBoolean() isJainAvailable?: boolean;
   @ApiPropertyOptional() @IsOptional() @IsString() categorySlug?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() cuisineSlug?: string;
   @ApiPropertyOptional({ enum: MealSlot, isArray: true }) @IsOptional() @IsArray() @IsEnum(MealSlot, { each: true }) slots?: MealSlot[];

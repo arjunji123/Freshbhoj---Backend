@@ -5,16 +5,18 @@ import {
   IsInt,
   IsLatitude,
   IsLongitude,
+  IsNumber,
   IsOptional,
   IsString,
   Matches,
+  Max,
   MaxLength,
   Min,
   MinLength,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { KitchenDocumentType } from '@prisma/client';
+import { KitchenDocumentType, KitchenType } from '@prisma/client';
 
 /** Step 1 — who is running this kitchen. */
 export class OwnerDetailsDto {
@@ -37,6 +39,10 @@ export class KitchenDetailsDto {
   @MinLength(3, { message: 'Kitchen name must be at least 3 characters' })
   @MaxLength(80)
   name: string;
+
+  @ApiProperty({ enum: KitchenType, example: KitchenType.HOME_KITCHEN })
+  @IsEnum(KitchenType, { message: 'Choose the kind of kitchen you operate' })
+  kitchenType: KitchenType;
 
   @ApiPropertyOptional({ example: 'Authentic Homemade North Indian' })
   @IsOptional()
@@ -128,6 +134,13 @@ export class KitchenLocationDto {
   @Type(() => Number)
   @IsLongitude()
   longitude: number;
+
+  @ApiProperty({ example: 5, description: 'How far this kitchen will deliver, in km (1-40)' })
+  @Type(() => Number)
+  @IsNumber()
+  @Min(1, { message: 'Service radius must be at least 1 km' })
+  @Max(40, { message: 'Service radius can be at most 40 km' })
+  serviceRadiusKm: number;
 }
 
 /** Step 4 — compliance paperwork. */

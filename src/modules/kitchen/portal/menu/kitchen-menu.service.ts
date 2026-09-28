@@ -1,4 +1,5 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { FoodType } from '@prisma/client';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import { MEAL_DETAIL_SELECT, toMealDetail } from '../../../discovery/meals/meals.selectors';
 import { UpdateMealDto, UpsertMealDto } from './dto/kitchen-menu.dto';
@@ -45,6 +46,7 @@ export class KitchenMenuService {
 
     const wantsPublished = dto.isAvailable ?? false;
     if (wantsPublished) this.assertPublishable(dto.calories, dto.proteinG);
+    if (dto.isJainAvailable) this.assertJainEligible(dto.foodType);
 
     const [categoryId, cuisineId] = await Promise.all([
       this.resolveCategoryId(dto.categorySlug),
@@ -61,6 +63,7 @@ export class KitchenMenuService {
         price: dto.price,
         mrp: dto.mrp,
         foodType: dto.foodType,
+        isJainAvailable: dto.isJainAvailable ?? false,
         categoryId,
         cuisineId,
         slots: dto.slots ?? [],
@@ -110,6 +113,7 @@ export class KitchenMenuService {
     const nextCalories = dto.calories ?? existing.calories ?? undefined;
     const nextProtein = dto.proteinG ?? existing.proteinG ?? undefined;
     if (dto.isAvailable === true) this.assertPublishable(nextCalories, nextProtein);
+    if (dto.isJainAvailable === true) this.assertJainEligible(dto.foodType ?? existing.foodType);
 
     const [categoryId, cuisineId] = await Promise.all([
       dto.categorySlug !== undefined ? this.resolveCategoryId(dto.categorySlug) : undefined,
@@ -125,6 +129,7 @@ export class KitchenMenuService {
         ...(dto.price !== undefined && { price: dto.price }),
         ...(dto.mrp !== undefined && { mrp: dto.mrp }),
         ...(dto.foodType !== undefined && { foodType: dto.foodType }),
+        ...(dto.isJainAvailable !== undefined && { isJainAvailable: dto.isJainAvailable }),
         ...(categoryId !== undefined && { categoryId }),
         ...(cuisineId !== undefined && { cuisineId }),
         ...(dto.slots !== undefined && { slots: dto.slots }),
@@ -177,6 +182,12 @@ export class KitchenMenuService {
     }
   }
 
+  private assertJainEligible(foodType?: FoodType) {
+    if (foodType === FoodType.EGG || foodType === FoodType.NON_VEG) {
+      throw new BadRequestException('Jain can only be offered for veg/vegan dishes');
+    }
+  }
+
   private async requireKitchen(accountId: string) {
     const kitchen = await this.prisma.kitchen.findUnique({ where: { accountId } });
     if (!kitchen) {
@@ -186,10 +197,10 @@ export class KitchenMenuService {
   }
 
   /**
-   * Always pulls `id`, `kitchenId`, `calories` and `proteinG` alongside
-   * whatever the caller asks for — every call site here only ever needs a
-   * subset of that fixed set, so one shape avoids fighting Prisma's generic
-   * `select` inference for what would be a single-use type parameter.
+   * Always pulls `id`, `kitchenId`, `calories`, `proteinG` and `foodType`
+   * alongside whatever the caller asks for — every call site here only ever
+   * needs a subset of that fixed set, so one shape avoids fighting Prisma's
+   * generic `select` inference for what would be a single-use type parameter.
    */
   private async getOwnedMeal(accountId: string, mealId: string) {
     const kitchen = await this.prisma.kitchen.findUnique({
@@ -200,7 +211,7 @@ export class KitchenMenuService {
 
     const meal = await this.prisma.meal.findUnique({
       where: { id: mealId },
-      select: { id: true, kitchenId: true, calories: true, proteinG: true },
+      select: { id: true, kitchenId: true, calories: true, proteinG: true, foodType: true },
     });
     if (!meal) throw new NotFoundException('Meal not found');
     if (meal.kitchenId !== kitchen.id) {

@@ -85,6 +85,12 @@ export class KitchenProfileDto {
   @ApiProperty({ type: [String], example: ['thali', 'north-indian'] })
   cuisines: string[];
 
+  @ApiProperty({ type: [String], example: ['North Indian', 'Home-style'] })
+  specialities: string[];
+
+  @ApiPropertyOptional({ nullable: true, example: 40 })
+  capacity: number | null;
+
   @ApiProperty({ example: '2026-01-14T06:12:00.000Z' })
   createdAt: string;
 }

@@ -96,6 +96,7 @@ model User {
   storyLikes             KitchenStoryLike[]
   ownedKitchens          Kitchen[]               @relation("KitchenOwner")
   notificationPreference NotificationPreference?
+  subscriptions          Subscription[]
 
   @@map("users")
 }
@@ -351,18 +352,31 @@ model Kitchen {
   followerCount Int     @default(0)
 
   // Location
-  addressLine String?
-  locality    String?
-  city        String  @default("Jaipur")
-  state       String  @default("Rajasthan")
-  pincode     String?
-  latitude    Float?
-  longitude   Float?
+  addressLine     String?
+  locality        String?
+  city            String  @default("Jaipur")
+  state           String  @default("Rajasthan")
+  pincode         String?
+  latitude        Float?
+  longitude       Float?
+  /// How far this kitchen is willing to deliver, set during onboarding.
+  serviceRadiusKm Float?
+
+  /// Business format, chosen during onboarding — nullable until the partner picks one.
+  kitchenType KitchenType?
+
+  /// Cuisine/theme tags shown on the profile (e.g. "North Indian", "Home-style").
+  specialities String[] @default([])
+  /// Max concurrent orders this kitchen can comfortably handle — optional, partner-set.
+  capacity     Int?
 
   // Operations
   prepTimeMins      Int     @default(30)
+  /// Legacy single-window hours — fallback when this kitchen has no `operatingHours`
+  /// rows yet. `isKitchenOpenNow()` in `common/utils/kitchen.ts` prefers the rows.
   opensAt           String  @default("08:00") // HH:mm, IST
   closesAt          String  @default("22:00")
+  /// The partner's own on/off switch — doubles as "emergency close" for today.
   isAcceptingOrders Boolean @default(true)
   contactPhone      String?
 
@@ -383,6 +397,11 @@ model Kitchen {
   reviews   Review[]
   orders    Order[]
   followers KitchenFollow[]
+
+  operatingHours   KitchenOperatingHours[]
+  holidayOverrides KitchenHolidayOverride[]
+  reelCampaigns    ReelCampaign[]
+  subscriptions    Subscription[]
 
   @@index([status, city])
   @@index([isVerified])
@@ -416,6 +435,63 @@ model KitchenFollow {
   @@unique([userId, kitchenId])
   @@index([kitchenId])
   @@map("kitchen_follows")
+}
+
+enum DayOfWeek {
+  MONDAY
+  TUESDAY
+  WEDNESDAY
+  THURSDAY
+  FRIDAY
+  SATURDAY
+  SUNDAY
+}
+
+/// One row per day of the week — the rich replacement for `Kitchen.opensAt`/
+/// `closesAt`. A kitchen with zero rows here still works: `isKitchenOpenNow()`
+/// falls back to the legacy single-window fields until a partner sets these up
+/// (lazily backfilled on first read of `GET /partner/operating-hours`).
+model KitchenOperatingHours {
+  id        String    @id @default(uuid())
+  kitchenId String
+  kitchen   Kitchen   @relation(fields: [kitchenId], references: [id], onDelete: Cascade)
+  dayOfWeek DayOfWeek
+  isClosed  Boolean   @default(false)
+
+  // Two sessions per day (e.g. lunch/dinner) — both optional, both-or-neither.
+  session1Start String? // "HH:mm", IST
+  session1End   String?
+  session2Start String?
+  session2End   String?
+
+  updatedAt DateTime @updatedAt
+
+  @@unique([kitchenId, dayOfWeek])
+  @@map("kitchen_operating_hours")
+}
+
+/// A specific calendar date that overrides the regular weekly schedule —
+/// either fully closed (a holiday) or open with different hours than usual.
+/// Takes precedence over `KitchenOperatingHours` when present for today.
+model KitchenHolidayOverride {
+  id        String   @id @default(uuid())
+  kitchenId String
+  kitchen   Kitchen  @relation(fields: [kitchenId], references: [id], onDelete: Cascade)
+  date      DateTime @db.Date
+  isClosed  Boolean  @default(true)
+
+  // Only meaningful when isClosed = false.
+  session1Start String?
+  session1End   String?
+  session2Start String?
+  session2End   String?
+
+  note      String?
+  createdAt DateTime @default(now())
+
+  @@unique([kitchenId, date])
+  @@index([kitchenId, date])
+  @@map("kitchen_holiday_overrides")
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -457,9 +533,14 @@ model Meal {
   isAvailable  Boolean @default(true)
   isBestseller Boolean @default(false)
 
-  foodType FoodType   @default(VEG)
-  slots    MealSlot[] @default([])
-  goalTags GoalTag[]  @default([])
+  foodType        FoodType   @default(VEG)
+  /// Can be prepared Jain-style (no onion/garlic/root veg) — a prep attribute
+  /// of a veg dish, not a mutually-exclusive category, so it sits alongside
+  /// `foodType` rather than as a 5th enum value. Only valid when foodType is
+  /// VEG or VEGAN (enforced in the DTO, not the DB).
+  isJainAvailable Boolean    @default(false)
+  slots           MealSlot[] @default([])
+  goalTags        GoalTag[]  @default([])
 
   // ── Nutrition transparency (per serving) ───────────────────────────────
   calories    Int?
@@ -583,6 +664,8 @@ model Cart {
   /// string, not a hard FK, same as couponCode: the story can expire/be
   /// deleted without orphaning the cart.
   sourceStoryId String?
+  /// Same idea as sourceStoryId, for a shoppable Reel.
+  sourceReelId  String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -667,9 +750,9 @@ model Order {
   status OrderStatus @default(PENDING_PAYMENT)
 
   // ── Money (whole rupees) ───────────────────────────────────────────────
-  itemsTotal  Int
-  deliveryFee Int @default(0)
-  taxes       Int @default(0)
+  itemsTotal    Int
+  deliveryFee   Int     @default(0)
+  taxes         Int     @default(0)
   /// Combined coupon + coin discount. The coin share is `coinsRedeemed` (1 coin = ₹1).
   discount      Int     @default(0)
   totalAmount   Int
@@ -677,6 +760,8 @@ model Order {
   coinsRedeemed Int     @default(0)
   /// Frozen from Cart.sourceStoryId at placement — powers "orders from this story" on the partner dashboard.
   sourceStoryId String?
+  /// Frozen from Cart.sourceReelId at placement — powers "orders from this reel" on the partner dashboard.
+  sourceReelId  String?
 
   paymentMethod PaymentMethod @default(UPI)
   paymentStatus PaymentStatus @default(PENDING)
@@ -699,9 +784,10 @@ model Order {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  items   OrderItem[]
-  events  OrderStatusEvent[]
-  reviews Review[]
+  items    OrderItem[]
+  events   OrderStatusEvent[]
+  reviews  Review[]
+  messages OrderMessage[]
 
   @@index([userId, createdAt])
   @@index([kitchenId, status])
@@ -738,6 +824,34 @@ model OrderStatusEvent {
 
   @@index([orderId, createdAt])
   @@map("order_status_events")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ORDER CHAT — per-order kitchen↔customer messaging
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum ChatSenderType {
+  KITCHEN
+  CUSTOMER
+}
+
+model OrderMessage {
+  id      String         @id @default(uuid())
+  orderId String
+  order   Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  sender  ChatSenderType
+  body    String
+
+  /// Set only when this message was sent alongside a real status transition
+  /// (currently just the kitchen's "Out for delivery" quick-reply chip) —
+  /// the other quick replies have no matching OrderStatus value.
+  triggeredStatus OrderStatus?
+
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([orderId, createdAt])
+  @@map("order_messages")
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -807,6 +921,11 @@ model Reel {
   hashtags     String[]   @default([])
   durationSec  Int        @default(0)
   status       ReelStatus @default(PUBLISHED)
+  /// Temporarily hidden from the feed, resumable — distinct from ARCHIVED
+  /// (permanent, one-way). A paused reel keeps its stats and can go live again.
+  isPaused     Boolean    @default(false)
+  /// Ops-set promotional flag — no self-serve boost flow or spend tracking yet.
+  isSponsored  Boolean    @default(false)
 
   viewCount    Int @default(0)
   likeCount    Int @default(0)
@@ -817,8 +936,9 @@ model Reel {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  likes ReelLike[]
-  saves ReelSave[]
+  likes     ReelLike[]
+  saves     ReelSave[]
+  campaigns ReelCampaign[]
 
   @@index([status, publishedAt])
   @@index([kitchenId])
@@ -849,6 +969,66 @@ model ReelSave {
   @@unique([reelId, userId])
   @@index([userId])
   @@map("reel_saves")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// REEL ADVERTISING — self-serve, budget-based reel promotion
+//
+// Independent of `Reel.isSponsored` (an ops-only, no-spend flag from an
+// earlier round) — this is the partner-facing "pay to promote" concept.
+// No background jobs exist in this codebase, so spend is never accrued by a
+// cron; it's computed on every read from `accrualAnchor`/`accruedSpendRs`,
+// the same lazy-settlement idiom KitchenOperatingHours already uses.
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum ReelCampaignStatus {
+  ACTIVE
+  PAUSED
+  ENDED
+}
+
+model ReelCampaign {
+  id            String             @id @default(uuid())
+  kitchenId     String
+  kitchen       Kitchen            @relation(fields: [kitchenId], references: [id], onDelete: Cascade)
+  reelId        String
+  reel          Reel               @relation(fields: [reelId], references: [id], onDelete: Cascade)
+  dailyBudgetRs Int
+  /// Null = runs indefinitely until the partner stops it.
+  endDate       DateTime?          @db.Date
+  status        ReelCampaignStatus @default(ACTIVE)
+
+  /// IST calendar date this campaign's spend has been settled up to.
+  accrualAnchor  DateTime @db.Date
+  /// Spend folded in from before `accrualAnchor` — the running total is
+  /// `accruedSpendRs` + (days elapsed since the anchor, if still ACTIVE) × `dailyBudgetRs`.
+  accruedSpendRs Int      @default(0)
+
+  pausedAt  DateTime?
+  endedAt   DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  dailyStats ReelCampaignDailyStat[]
+
+  @@index([kitchenId, status])
+  @@index([reelId, status])
+  @@map("reel_campaigns")
+}
+
+/// One row per (campaign, IST calendar date) — impressions/clicks tracked
+/// as a reel is served/viewed while a campaign on it is ACTIVE.
+model ReelCampaignDailyStat {
+  id          String       @id @default(uuid())
+  campaignId  String
+  campaign    ReelCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  date        DateTime     @db.Date
+  impressions Int          @default(0)
+  clicks      Int          @default(0)
+  updatedAt   DateTime     @updatedAt
+
+  @@unique([campaignId, date])
+  @@map("reel_campaign_daily_stats")
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -927,7 +1107,19 @@ enum KitchenDocumentType {
   AADHAAR
   SHOP_LICENSE
   BANK_PROOF
+  /// Unused — superseded by KITCHEN_PHOTO_FRONT / KITCHEN_PHOTO_MAIN, kept so
+  /// existing rows (if any) don't break. Do not write new rows with this type.
   KITCHEN_PHOTOS
+  KITCHEN_PHOTO_FRONT
+  KITCHEN_PHOTO_MAIN
+}
+
+/// Business format the partner registers as, chosen during onboarding.
+enum KitchenType {
+  HOME_KITCHEN
+  CLOUD_KITCHEN
+  RESTAURANT
+  TIFFIN_SERVICE
 }
 
 enum DocumentStatus {
@@ -955,10 +1147,15 @@ model KitchenAccount {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  kitchen       Kitchen?
-  refreshTokens KitchenRefreshToken[]
-  documents     KitchenDocument[]
-  bankAccount   KitchenBankAccount?
+  kitchen                 Kitchen?
+  refreshTokens           KitchenRefreshToken[]
+  documents               KitchenDocument[]
+  bankAccount             KitchenBankAccount?
+  fssaiAssistanceRequests FssaiAssistanceRequest[]
+  notifications           Notification[]
+  payouts                 Payout[]
+  bhojAiConversations     BhojAiConversation[]
+  bhojAiEscalations       BhojAiEscalation[]
 
   @@index([status])
   @@map("kitchen_accounts")
@@ -995,6 +1192,226 @@ model KitchenDocument {
   @@map("kitchen_documents")
 }
 
+/// A partner who doesn't already have an FSSAI licence can ask FreshBhoj's
+/// ops team to file the government application on their behalf, for a fee.
+/// Deliberately independent of `KitchenAccount.onboardingStep` (forward-only
+/// funnel) and `KitchenDocument` (one row per type, ever) — this can be
+/// requested at any point, and a rejected/cancelled request can be followed
+/// by a fresh one.
+enum FssaiAssistanceStatus {
+  PENDING_PAYMENT
+  DOCUMENTS_SUBMITTED
+  APPLICATION_FILED
+  GOVT_REVIEW_IN_PROGRESS
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+model FssaiAssistanceRequest {
+  id        String                @id @default(uuid())
+  accountId String
+  account   KitchenAccount        @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  status    FssaiAssistanceStatus @default(PENDING_PAYMENT)
+
+  govtFee    Int @default(1000)
+  serviceFee Int @default(500)
+  totalFee   Int @default(1500)
+
+  /// Placeholder for this phase — no payment gateway is wired yet.
+  paymentStatus PaymentStatus @default(PENDING)
+  paymentRef    String?
+
+  licenseNumber  String?
+  validFrom      DateTime?
+  validTill      DateTime?
+  certificateUrl String?
+
+  rejectionReason String?
+  submittedAt     DateTime?
+  filedAt         DateTime?
+  approvedAt      DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  documents FssaiAssistanceDocument[]
+
+  @@index([accountId])
+  @@index([status])
+  @@map("fssai_assistance_requests")
+}
+
+enum FssaiAssistanceDocumentType {
+  IDENTITY_PROOF
+  ADDRESS_PROOF
+  KITCHEN_PHOTO
+  PASSPORT_PHOTO
+}
+
+model FssaiAssistanceDocument {
+  id        String                      @id @default(uuid())
+  requestId String
+  request   FssaiAssistanceRequest      @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  type      FssaiAssistanceDocumentType
+  fileUrl   String
+  status    DocumentStatus              @default(PENDING)
+  remarks   String?
+  createdAt DateTime                    @default(now())
+  updatedAt DateTime                    @updatedAt
+
+  // Unique per REQUEST, not per account — a fresh request after a rejected
+  // one starts with a clean document set.
+  @@unique([requestId, type])
+  @@map("fssai_assistance_documents")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BHOJAI — the kitchen partner's AI assistant (multi-turn, tool-calling)
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum ConversationStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+/// One conversation per account at a time — `/bhojai/reset` archives the
+/// current one so the next message starts fresh.
+model BhojAiConversation {
+  id        String             @id @default(uuid())
+  accountId String
+  account   KitchenAccount     @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  status    ConversationStatus @default(ACTIVE)
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+
+  messages    BhojAiMessage[]
+  escalations BhojAiEscalation[]
+
+  @@index([accountId, status])
+  @@map("bhojai_conversations")
+}
+
+enum BhojAiMessageRole {
+  USER
+  MODEL
+  FUNCTION
+}
+
+model BhojAiMessage {
+  id             String             @id @default(uuid())
+  conversationId String
+  conversation   BhojAiConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  role           BhojAiMessageRole
+
+  /// Prose — the user's text, or the model's final answer. Null on
+  /// functionCall/FUNCTION rows (those are internal bookkeeping, never shown).
+  text           String?
+  /// {name, args} — set on MODEL rows that requested a tool instead of answering.
+  functionCall   Json?
+  /// {name, response} — set on FUNCTION rows: our tool's return value, fed
+  /// back to Gemini as the next turn.
+  functionResult Json?
+  /// Deterministic, backend-built UI payload (e.g. a status card) attached to
+  /// a final MODEL text row — never authored by the model itself.
+  card           Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([conversationId, createdAt])
+  @@map("bhojai_messages")
+}
+
+enum EscalationStatus {
+  OPEN
+  RESOLVED
+}
+
+/// What the `requestHumanEscalation` tool creates — a ticket ops can see via
+/// the V0 admin tool. No paging/human notification exists; this is the whole
+/// scope of "escalate to a specialist" for now.
+model BhojAiEscalation {
+  id             String              @id @default(uuid())
+  accountId      String
+  account        KitchenAccount      @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  conversationId String?
+  conversation   BhojAiConversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  reason         String
+  status         EscalationStatus    @default(OPEN)
+  createdAt      DateTime            @default(now())
+  resolvedAt     DateTime?
+
+  @@index([status, createdAt])
+  @@map("bhojai_escalations")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NOTIFICATIONS (kitchen-partner in-app feed)
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum NotificationCategory {
+  ORDER
+  SUBSCRIPTION
+  REEL
+  GENERAL
+}
+
+/// SUBSCRIPTION/REEL exist for UI completeness (the mockup's tab set) but have
+/// zero producers right now — no subscriptions feature and no reel-engagement
+/// event pipeline exist yet. Same scope reduction as the unused
+/// NotificationPreference.promotions/newKitchens toggles.
+model Notification {
+  id        String               @id @default(uuid())
+  accountId String
+  account   KitchenAccount       @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  category  NotificationCategory
+  title     String
+  body      String
+  /// e.g. {"orderId": "...", "action": "ACCEPT_ORDER"} — drives inline quick-actions.
+  data      Json?
+  isRead    Boolean              @default(false)
+  createdAt DateTime             @default(now())
+
+  @@index([accountId, isRead, createdAt])
+  @@index([accountId, category, createdAt])
+  @@map("notifications")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PAYOUTS
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum PayoutStatus {
+  REQUESTED
+  PROCESSING
+  PAID
+  FAILED
+}
+
+model Payout {
+  id        String         @id @default(uuid())
+  accountId String
+  account   KitchenAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  amount    Int
+  status    PayoutStatus   @default(REQUESTED)
+
+  /// Snapshot of KitchenBankAccount at request time — the destination can
+  /// change later without altering a payout already in flight.
+  bankAccountSnapshot Json
+
+  /// Placeholder — no real transfer/gateway API wired, mirrors
+  /// FssaiAssistanceRequest.paymentRef.
+  transferRef   String?
+  failureReason String?
+
+  requestedAt DateTime  @default(now())
+  processedAt DateTime?
+  paidAt      DateTime?
+
+  @@index([accountId, status])
+  @@map("payouts")
+}
+
 model KitchenBankAccount {
   id                 String         @id @default(uuid())
   accountId          String         @unique
@@ -1010,6 +1427,103 @@ model KitchenBankAccount {
   updatedAt          DateTime       @updatedAt
 
   @@map("kitchen_bank_accounts")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SUBSCRIPTIONS — recurring meal plans, kitchen-managed
+//
+// No background-job infra exists in this codebase, so delivery/billing rows
+// are never generated by a cron. They're lazily backfilled on read (and once
+// eagerly on approval), the same idiom as KitchenOperatingHours's 7-day
+// backfill and ReelCampaign's spend settlement.
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum SubscriptionStatus {
+  /// Customer has requested it; the kitchen hasn't approved or rejected yet.
+  PENDING
+  ACTIVE
+  PAUSED
+  CANCELLED
+  REJECTED
+}
+
+enum SubscriptionBillingCycle {
+  WEEKLY
+  MONTHLY
+}
+
+enum DeliveryScheduleStatus {
+  SCHEDULED
+  DISPATCHED
+  SKIPPED
+}
+
+model Subscription {
+  id        String  @id @default(uuid())
+  userId    String
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kitchenId String
+  kitchen   Kitchen @relation(fields: [kitchenId], references: [id], onDelete: Cascade)
+
+  planName            String
+  foodType            FoodType
+  mealsPerDay         Int                      @default(1)
+  deliveryDays        DayOfWeek[]
+  deliveryTime        MealSlot
+  billingCycle        SubscriptionBillingCycle @default(WEEKLY)
+  /// Frozen at creation — later price-list changes don't affect an existing subscriber.
+  pricePerCycle       Int
+  specialInstructions String?
+
+  status          SubscriptionStatus @default(PENDING)
+  rejectionReason String?
+
+  startDate   DateTime  @db.Date
+  approvedAt  DateTime?
+  pausedAt    DateTime?
+  cancelledAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  deliveries    SubscriptionDelivery[]
+  billingEvents SubscriptionBillingEvent[]
+
+  @@index([kitchenId, status])
+  @@index([userId])
+  @@map("subscriptions")
+}
+
+/// One row per (subscription, delivery date) — a rolling 7-day window is
+/// lazily backfilled on every `GET /partner/subscriptions/:id` while ACTIVE.
+model SubscriptionDelivery {
+  id             String                 @id @default(uuid())
+  subscriptionId String
+  subscription   Subscription           @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  date           DateTime               @db.Date
+  status         DeliveryScheduleStatus @default(SCHEDULED)
+  dispatchedAt   DateTime?
+  skipReason     String?
+  createdAt      DateTime               @default(now())
+
+  @@unique([subscriptionId, date])
+  @@map("subscription_deliveries")
+}
+
+/// One row per billing-cycle boundary already in the past — always created
+/// already-PAID (a placeholder charge, no payment gateway wired, same as
+/// FssaiAssistanceRequest/Payout in earlier rounds).
+model SubscriptionBillingEvent {
+  id             String        @id @default(uuid())
+  subscriptionId String
+  subscription   Subscription  @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  cycleStart     DateTime      @db.Date
+  amount         Int
+  paymentStatus  PaymentStatus @default(PAID)
+  createdAt      DateTime      @default(now())
+
+  @@unique([subscriptionId, cycleStart])
+  @@map("subscription_billing_events")
 }
 
 // ═════════════════════════════════════════════════════════════════════════════

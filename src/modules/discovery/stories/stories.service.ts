@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
-import { isKitchenOpenNow } from '../../../common/utils/kitchen';
+import { getIstTodayDateOnly, isKitchenOpenNow } from '../../../common/utils/kitchen';
 
 /**
  * Kitchen Stories — the horizontal rail at the top of Home.
@@ -23,6 +23,7 @@ export class StoriesService {
    */
   async getCityFeed(city: string, userId?: string) {
     const now = new Date();
+    const todayIstDateOnly = getIstTodayDateOnly(now);
 
     const stories = await this.prisma.kitchenStory.findMany({
       where: {
@@ -56,6 +57,27 @@ export class StoriesService {
             opensAt: true,
             closesAt: true,
             isAcceptingOrders: true,
+            operatingHours: {
+              select: {
+                dayOfWeek: true,
+                isClosed: true,
+                session1Start: true,
+                session1End: true,
+                session2Start: true,
+                session2End: true,
+              },
+            },
+            holidayOverrides: {
+              where: { date: todayIstDateOnly },
+              take: 1,
+              select: {
+                isClosed: true,
+                session1Start: true,
+                session1End: true,
+                session2Start: true,
+                session2End: true,
+              },
+            },
           },
         },
       },
@@ -79,7 +101,12 @@ export class StoriesService {
             locality: story.kitchen.locality,
             isOpenNow:
               story.kitchen.isAcceptingOrders &&
-              isKitchenOpenNow(story.kitchen.opensAt, story.kitchen.closesAt),
+              isKitchenOpenNow({
+                opensAt: story.kitchen.opensAt,
+                closesAt: story.kitchen.closesAt,
+                operatingHours: story.kitchen.operatingHours,
+                holidayOverride: story.kitchen.holidayOverrides?.[0] ?? null,
+              }),
           },
           items: [],
         });

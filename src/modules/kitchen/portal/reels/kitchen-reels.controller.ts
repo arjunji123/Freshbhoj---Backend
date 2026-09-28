@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, ParseUUIDPipe, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Patch, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { KitchenAccount } from '@prisma/client';
 import { KitchenReelsService } from './kitchen-reels.service';
@@ -69,5 +69,23 @@ export class KitchenReelsController {
       message: 'Reel removed',
       data: await this.kitchenReelsService.archive(account.id, id),
     };
+  }
+
+  @Post(':id/pause')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Temporarily hide a reel from the public feed — resumable, unlike delete' })
+  @ApiEnvelopeError(403, 'This reel belongs to another kitchen')
+  @ApiEnvelopeError(404, 'Reel not found')
+  async pause(@CurrentKitchenAccount() account: KitchenAccount, @Param('id', ParseUUIDPipe) id: string) {
+    return { message: 'Reel paused', data: await this.kitchenReelsService.pause(account.id, id) };
+  }
+
+  @Post(':id/resume')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Make a paused reel visible in the public feed again' })
+  @ApiEnvelopeError(403, 'This reel belongs to another kitchen')
+  @ApiEnvelopeError(404, 'Reel not found')
+  async resume(@CurrentKitchenAccount() account: KitchenAccount, @Param('id', ParseUUIDPipe) id: string) {
+    return { message: 'Reel resumed', data: await this.kitchenReelsService.resume(account.id, id) };
   }
 }

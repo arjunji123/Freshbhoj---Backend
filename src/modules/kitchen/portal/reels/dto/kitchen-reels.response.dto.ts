@@ -23,6 +23,12 @@ export class KitchenReelDto {
   @ApiProperty({ enum: ReelStatus, example: ReelStatus.PUBLISHED })
   status: ReelStatus;
 
+  @ApiProperty({ example: false, description: 'Temporarily hidden from the public feed, resumable — distinct from ARCHIVED (permanent)' })
+  isPaused: boolean;
+
+  @ApiProperty({ example: false, description: 'Ops-set promotional flag — no self-serve toggle exists' })
+  isSponsored: boolean;
+
   @ApiProperty({ example: 1204 })
   viewCount: number;
 
@@ -34,6 +40,9 @@ export class KitchenReelDto {
 
   @ApiProperty({ example: 3 })
   commentCount: number;
+
+  @ApiProperty({ example: 12, description: 'Live-computed from orders whose sourceReelId matches — not a stored column' })
+  orderCount: number;
 
   @ApiPropertyOptional({ nullable: true, example: 'Butter Chicken Bowl' })
   mealName: string | null;
