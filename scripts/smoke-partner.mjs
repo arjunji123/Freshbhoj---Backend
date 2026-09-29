@@ -666,14 +666,17 @@ step(42, 'Ops: process then complete the payout (REQUESTED → PROCESSING → PA
       headers,
       body: { transferRef: 'UTR-SMOKE-TEST-001' },
     });
+    // Both admin endpoints have no @HttpCode override, so NestJS's default
+    // POST status applies here — 201, not 200 (same as every other
+    // no-@HttpCode admin POST route, e.g. fssai-assistance-admin's).
     expect(
       !!inQueue &&
-        processed.status === 200 &&
+        processed.status === 201 &&
         processed.data?.status === 'PROCESSING' &&
-        completed.status === 200 &&
+        completed.status === 201 &&
         completed.data?.status === 'PAID' &&
         completed.data?.transferRef === 'UTR-SMOKE-TEST-001',
-      `found in ops queue=${!!inQueue} · ${processed.data?.status} → ${completed.data?.status} · transferRef=${completed.data?.transferRef}`,
+      `found in ops queue=${!!inQueue} · ${processed.data?.status} (HTTP ${processed.status}) → ${completed.data?.status} (HTTP ${completed.status}) · transferRef=${completed.data?.transferRef}`,
     );
   }
 }
