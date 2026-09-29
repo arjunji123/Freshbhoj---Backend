@@ -259,6 +259,8 @@ export class MealsService {
         return [{ calories: 'asc' }];
       case MealSortBy.PROTEIN_HIGH:
         return [{ proteinG: 'desc' }];
+      case MealSortBy.PREP_TIME_LOW:
+        return [{ prepTimeMins: 'asc' }];
       case MealSortBy.NEWEST:
         return [{ createdAt: 'desc' }];
       case MealSortBy.RECOMMENDED:

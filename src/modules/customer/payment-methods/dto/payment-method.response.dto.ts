@@ -34,3 +34,20 @@ export class DeletedCardDto {
   @ApiProperty({ example: '3f4a5b6c-7d8e-49f0-8a1b-2c3d4e5f6a7b' })
   id: string;
 }
+
+export class UpiIdDto {
+  @ApiProperty({ example: '3f4a5b6c-7d8e-49f0-8a1b-2c3d4e5f6a7b' })
+  id: string;
+
+  @ApiProperty({ example: 'rahul.sharma@okhdfcbank' })
+  vpa: string;
+
+  @ApiPropertyOptional({ nullable: true, example: 'Google Pay' })
+  label: string | null;
+
+  @ApiProperty({ example: true })
+  isDefault: boolean;
+
+  @ApiProperty({ example: '2026-09-03T09:24:11.482Z' })
+  createdAt: string;
+}

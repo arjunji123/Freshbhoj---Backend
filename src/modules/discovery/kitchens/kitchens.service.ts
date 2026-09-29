@@ -211,6 +211,34 @@ export class KitchensService {
     return paginate(rows.map((r) => toMealCard(r, favouriteIds)), page, limit, total);
   }
 
+  async getSubscriptionPlans(kitchenId: string) {
+    await this.assertExists(kitchenId);
+
+    const plans = await this.prisma.subscriptionPlan.findMany({
+      where: { kitchenId, isActive: true },
+      orderBy: [{ isPopular: 'desc' }, { createdAt: 'asc' }],
+    });
+
+    return plans.map((plan) => ({
+      id: plan.id,
+      name: plan.name,
+      billingCycle: plan.billingCycle,
+      deliveryDays: plan.deliveryDays,
+      mealsPerDay: plan.mealsPerDay,
+      priceRs: plan.priceRs,
+      originalPriceRs: plan.originalPriceRs,
+      discountPercent:
+        plan.originalPriceRs && plan.originalPriceRs > plan.priceRs
+          ? Math.round(((plan.originalPriceRs - plan.priceRs) / plan.originalPriceRs) * 100)
+          : 0,
+      dietOptions: plan.dietOptions,
+      jainAvailable: plan.jainAvailable,
+      slotOptions: plan.slotOptions,
+      includesDescription: plan.includesDescription,
+      isPopular: plan.isPopular,
+    }));
+  }
+
   // ──────────────────────────────────────────────────────────────────────────
   // FOLLOW
   // ──────────────────────────────────────────────────────────────────────────

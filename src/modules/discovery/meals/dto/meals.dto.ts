@@ -24,6 +24,7 @@ export enum MealSortBy {
   PRICE_HIGH = 'price_high',
   CALORIES_LOW = 'calories_low',
   PROTEIN_HIGH = 'protein_high',
+  PREP_TIME_LOW = 'prep_time_low',
   NEWEST = 'newest',
 }
 

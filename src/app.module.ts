@@ -23,6 +23,7 @@ import { OrdersModule } from './modules/customer/orders/orders.module';
 import { WishlistModule } from './modules/customer/wishlist/wishlist.module';
 import { PaymentMethodsModule } from './modules/customer/payment-methods/payment-methods.module';
 import { SubscriptionsModule } from './modules/customer/subscriptions/subscriptions.module';
+import { CustomerWalletModule } from './modules/customer/wallet/wallet.module';
 
 // ── Discovery (browsable catalogue) ─────────────────────────────────────────
 import { CatalogModule } from './modules/discovery/catalog/catalog.module';
@@ -50,6 +51,7 @@ import { PayoutsModule } from './modules/kitchen/portal/payouts/payouts.module';
 import { OperatingHoursModule } from './modules/kitchen/portal/operating-hours/operating-hours.module';
 import { KitchenAdsModule } from './modules/kitchen/portal/ads/kitchen-ads.module';
 import { KitchenSubscriptionsModule } from './modules/kitchen/portal/subscriptions/kitchen-subscriptions.module';
+import { SubscriptionPlansModule } from './modules/kitchen/portal/subscription-plans/subscription-plans.module';
 import { OrderChatModule } from './modules/kitchen/portal/order-chat/order-chat.module';
 import { WalletModule } from './modules/kitchen/portal/wallet/wallet.module';
 import { AdsSuggestionsModule } from './modules/kitchen/portal/ads-suggestions/ads-suggestions.module';
@@ -101,6 +103,7 @@ import geminiConfig from './config/gemini.config';
     WishlistModule,
     PaymentMethodsModule,
     SubscriptionsModule,
+    CustomerWalletModule,
     SupportModule,
     ReferralModule,
     // HomeModule aggregates the modules above, so it is registered last.
@@ -124,6 +127,7 @@ import geminiConfig from './config/gemini.config';
     OperatingHoursModule,
     KitchenAdsModule,
     KitchenSubscriptionsModule,
+    SubscriptionPlansModule,
     OrderChatModule,
     WalletModule,
     AdsSuggestionsModule,

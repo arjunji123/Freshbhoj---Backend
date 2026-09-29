@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { MediaType } from '@prisma/client';
+import { DayOfWeek, FoodType, MealSlot, MediaType, SubscriptionBillingCycle } from '@prisma/client';
 
 export class OpeningHoursDto {
   @ApiProperty({ example: '08:00', description: 'HH:mm, IST' })
@@ -162,4 +162,20 @@ export class FollowToggleDto {
 
   @ApiProperty({ example: 3821 })
   followerCount: number;
+}
+
+export class SubscriptionPlanCardDto {
+  @ApiProperty() id: string;
+  @ApiProperty({ example: 'Weekly Plan' }) name: string;
+  @ApiProperty({ enum: SubscriptionBillingCycle }) billingCycle: SubscriptionBillingCycle;
+  @ApiProperty({ enum: DayOfWeek, isArray: true }) deliveryDays: DayOfWeek[];
+  @ApiProperty({ example: 1 }) mealsPerDay: number;
+  @ApiProperty({ example: 999 }) priceRs: number;
+  @ApiPropertyOptional({ example: 1299, nullable: true }) originalPriceRs: number | null;
+  @ApiProperty({ example: 23, description: '0 when no discount' }) discountPercent: number;
+  @ApiProperty({ enum: FoodType, isArray: true }) dietOptions: FoodType[];
+  @ApiProperty() jainAvailable: boolean;
+  @ApiProperty({ enum: MealSlot, isArray: true }) slotOptions: MealSlot[];
+  @ApiProperty({ example: '1 Sabzi, 4 Roti, Dal, Rice, Salad & Sweet' }) includesDescription: string;
+  @ApiProperty() isPopular: boolean;
 }

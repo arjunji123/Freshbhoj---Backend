@@ -54,6 +54,12 @@ export class NotificationPreferencesDto {
 
   @ApiProperty({ example: true })
   whatsappUpdates: boolean;
+
+  @ApiProperty({ example: true })
+  subscriptionReminders: boolean;
+
+  @ApiProperty({ example: true })
+  dailyAiRecommendations: boolean;
 }
 
 export class ProfileStatsDto {

@@ -287,6 +287,17 @@ var kitchenId;
     r.status === 200 && r.data.isVerified === true,
     `${r.data?.name} · isVerified=${r.data?.isVerified} · openNow=${r.data?.isOpenNow}`,
   );
+
+  // This script runs plenty of order-dependent steps well past the default
+  // 08:00-22:00 hours during a long session — widen *only today* to
+  // 00:00-23:59 right away so order placement isn't fragile to what time it
+  // is right now. GET first to trigger the natural lazy backfill-to-7-rows
+  // (still at Kitchen-default hours) *before* touching anything, so step 44
+  // below still sees a real 7-row backfill and an untouched Monday.
+  await call('GET', '/partner/operating-hours');
+  await call('PUT', `/partner/operating-hours/${istDayOfWeek()}`, {
+    body: { isClosed: false, session1Start: '00:00', session1End: '23:59' },
+  });
 }
 
 step(18, 'The published dish is visible to customers, with nutrition intact');
@@ -731,9 +742,10 @@ step(45, `Closing today (${today}) makes the kitchen closed right now regardless
     `${today} isClosed=${r.data?.isClosed} · customer sees isOpenNow=${publicView.data?.isOpenNow}`,
   );
 
-  // Revert to the kitchen's normal hours so the row is left in a sane state.
+  // Revert to the wide-open hours set right after step 17 (not the original
+  // 08:00-22:00 default) so later steps stay safe regardless of time of day.
   const reverted = await call('PUT', `/partner/operating-hours/${today}`, {
-    body: { isClosed: false, session1Start: '08:00', session1End: '22:00' },
+    body: { isClosed: false, session1Start: '00:00', session1End: '23:59' },
   });
   expect(reverted.status === 200 && reverted.data.isClosed === false, `reverted isClosed=${reverted.data?.isClosed}`);
 }
@@ -1372,6 +1384,276 @@ step(73, 'Coverage: menu CRUD completeness — detail fetch, edit, toggle availa
       availability.data?.isAvailable === false &&
       del.status === 200,
     `detail fetch → HTTP ${detail.status} · patch price → ₹${patch.data?.price} · availability → ${availability.data?.isAvailable} · delete → HTTP ${del.status}`,
+  );
+}
+
+// ── 74–77: Subscription Plans — kitchen-authored templates customers browse ─
+step(74, 'Subscription Plans: kitchen creates a plan; it is invisible publicly until isActive, then visible');
+var planId;
+{
+  const create = await call('POST', '/partner/subscription-plans', {
+    body: {
+      name: 'Smoke Weekly Plan',
+      billingCycle: 'WEEKLY',
+      deliveryDays: ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'],
+      mealsPerDay: 1,
+      priceRs: 999,
+      originalPriceRs: 1299,
+      dietOptions: ['VEG'],
+      jainAvailable: true,
+      slotOptions: ['LUNCH', 'DINNER'],
+      includesDescription: '1 Sabzi, 4 Roti, Dal, Rice, Salad & Sweet',
+      isPopular: true,
+    },
+  });
+  planId = create.data?.id;
+
+  const deactivated = await call('PATCH', `/partner/subscription-plans/${planId}`, { body: { isActive: false } });
+  const publicWhileInactive = await call('GET', `/kitchens/${kitchenId}/subscription-plans`, { token: null });
+
+  const reactivated = await call('PATCH', `/partner/subscription-plans/${planId}`, { body: { isActive: true } });
+  const publicWhileActive = await call('GET', `/kitchens/${kitchenId}/subscription-plans`, { token: null });
+  const foundPublic = publicWhileActive.data?.find((p) => p.id === planId);
+
+  expect(
+    create.status === 201 &&
+      create.data?.discountPercent === 23 &&
+      deactivated.data?.isActive === false &&
+      !publicWhileInactive.data?.some((p) => p.id === planId) &&
+      reactivated.data?.isActive === true &&
+      foundPublic &&
+      foundPublic.priceRs === 999,
+    `created discountPercent=${create.data?.discountPercent} (expected 23) · hidden while inactive=${!publicWhileInactive.data?.some((p) => p.id === planId)} · visible once active=${!!foundPublic}`,
+  );
+
+  const jainMismatch = await call('POST', '/partner/subscription-plans', {
+    body: {
+      name: 'Bad Jain Plan',
+      billingCycle: 'WEEKLY',
+      deliveryDays: ['MONDAY'],
+      mealsPerDay: 1,
+      priceRs: 500,
+      dietOptions: ['NON_VEG'],
+      jainAvailable: true,
+      slotOptions: ['LUNCH'],
+      includesDescription: 'x',
+    },
+  });
+  expect(jainMismatch.status === 400, `Jain-on-non-veg-only plan → HTTP ${jainMismatch.status} (expected 400)`);
+}
+
+step(75, 'Subscription Plans: subscribing with a diet/slot combo the plan does not offer is rejected 400');
+{
+  const badFoodType = await call('POST', '/customer/subscriptions', {
+    body: { kitchenId, planId, foodType: 'NON_VEG', deliveryTime: 'LUNCH' },
+    token: chatBuyerToken,
+  });
+  const badSlot = await call('POST', '/customer/subscriptions', {
+    body: { kitchenId, planId, foodType: 'VEG', deliveryTime: 'BREAKFAST' },
+    token: chatBuyerToken,
+  });
+  expect(
+    badFoodType.status === 400 && badSlot.status === 400,
+    `wrong foodType → HTTP ${badFoodType.status} · wrong slot → HTTP ${badSlot.status}`,
+  );
+}
+
+step(76, 'Subscription Plans: subscribing with a valid combo takes the plan price verbatim (not the flat-rate formula), with a Jain note folded into specialInstructions');
+var planSubId;
+{
+  const create = await call('POST', '/customer/subscriptions', {
+    body: { kitchenId, planId, foodType: 'VEG', deliveryTime: 'DINNER', jainRequested: true },
+    token: chatBuyerToken,
+  });
+  planSubId = create.data?.id;
+  expect(
+    create.status === 201 &&
+      create.data?.pricePerCycle === 999 &&
+      create.data?.planName === 'Smoke Weekly Plan' &&
+      create.data?.deliveryTime === 'DINNER' &&
+      create.data?.specialInstructions?.includes('Jain-style requested'),
+    `pricePerCycle=${create.data?.pricePerCycle} (expected 999, not the flat formula) · planName="${create.data?.planName}" · specialInstructions="${create.data?.specialInstructions}"`,
+  );
+}
+
+step(77, 'Subscription Plans: the kitchen can approve a plan-based request through the exact same flow as a bespoke one');
+{
+  const approve = await call('POST', `/partner/subscriptions/${planSubId}/approve`);
+  expect(
+    approve.status === 200 && approve.data?.status === 'ACTIVE',
+    `approve → HTTP ${approve.status}, status=${approve.data?.status}`,
+  );
+}
+
+// ── 78–86: Customer Wallet, bespoke-subscription wallet/coin charge, pause/resume/vacation-mode, dish swap ──
+step(78, 'Customer Wallet: top up, then a WALLET-paid order debits it and skips confirm-payment entirely');
+var custAddressId;
+{
+  const address = await call('POST', '/customer/addresses', {
+    body: { label: 'HOME', line1: 'Wallet Test Address', locality: 'Malviya Nagar', pincode: '302017' },
+    token: chatBuyerToken,
+  });
+  custAddressId = address.data.id;
+
+  const topup = await call('POST', '/customer/wallet/topup', { body: { amountRs: 2000 }, token: chatBuyerToken });
+  await call('POST', '/customer/cart/items', { body: { mealId, quantity: 1 }, token: chatBuyerToken });
+  const order = await call('POST', '/customer/orders', {
+    body: { addressId: custAddressId, paymentMethod: 'WALLET' },
+    token: chatBuyerToken,
+  });
+  const walletAfter = await call('GET', '/customer/wallet', { token: chatBuyerToken });
+  expect(
+    topup.status === 200 &&
+      topup.data?.wallet?.balanceRs === 2000 &&
+      order.status === 201 &&
+      order.data?.status === 'PLACED' &&
+      order.data?.paymentStatus === 'PAID' &&
+      walletAfter.data?.balanceRs === 2000 - order.data?.totalAmount,
+    `topup → balanceRs=${topup.data?.wallet?.balanceRs} · order status=${order.data?.status}/${order.data?.paymentStatus} · wallet after=${walletAfter.data?.balanceRs} (expected ${2000 - (order.data?.totalAmount ?? 0)})`,
+  );
+}
+
+step(79, 'Customer Wallet: a WALLET order costing more than the balance is rejected 400, balance unchanged');
+{
+  const before = await call('GET', '/customer/wallet', { token: chatBuyerToken });
+  await call('POST', '/customer/cart/items', { body: { mealId, quantity: 50 }, token: chatBuyerToken });
+  const order = await call('POST', '/customer/orders', {
+    body: { addressId: custAddressId, paymentMethod: 'WALLET' },
+    token: chatBuyerToken,
+  });
+  const after = await call('GET', '/customer/wallet', { token: chatBuyerToken });
+  await call('DELETE', '/customer/cart', { token: chatBuyerToken });
+  expect(
+    order.status === 400 && after.data?.balanceRs === before.data?.balanceRs,
+    `oversized order → HTTP ${order.status} · balance before=${before.data?.balanceRs} after=${after.data?.balanceRs} (must be unchanged)`,
+  );
+}
+
+step(80, 'Customer Wallet: a withdrawal reserves the amount immediately; an ops admin fail refunds it');
+{
+  const before = await call('GET', '/customer/wallet', { token: chatBuyerToken });
+  const withdraw = await call('POST', '/customer/wallet/withdraw', {
+    body: { amountRs: 300, destination: { upiId: 'smoketest@okhdfcbank' } },
+    token: chatBuyerToken,
+  });
+  const afterRequest = await call('GET', '/customer/wallet', { token: chatBuyerToken });
+  const fail = await call('POST', `/admin/customer-wallet-withdrawals/${withdraw.data?.id}/fail`, {
+    body: { reason: 'UPI ID could not be verified' },
+    headers: { 'x-admin-secret': ADMIN_SECRET },
+  });
+  const afterFail = await call('GET', '/customer/wallet', { token: chatBuyerToken });
+  expect(
+    withdraw.status === 201 &&
+      afterRequest.data?.balanceRs === before.data?.balanceRs - 300 &&
+      fail.status === 201 &&
+      fail.data?.status === 'FAILED' &&
+      afterFail.data?.balanceRs === before.data?.balanceRs,
+    `reserved after request=${afterRequest.data?.balanceRs} (expected ${before.data?.balanceRs - 300}) · fail → HTTP ${fail.status} status=${fail.data?.status} · refunded balance=${afterFail.data?.balanceRs} (expected ${before.data?.balanceRs})`,
+  );
+}
+
+step(81, 'Bespoke Subscription via WALLET: the quote endpoint matches the real charge, and pricePerCycle stays full price while only the first cycle is discount-free-but-debited');
+var bespokeWalletSubId;
+{
+  const days = ['MONDAY', 'WEDNESDAY', 'FRIDAY'];
+  const quote = await call('POST', '/customer/subscriptions/quote', {
+    body: { kitchenId, mealsPerDay: 1, deliveryDays: days, billingCycle: 'WEEKLY', paymentMethod: 'WALLET' },
+    token: chatBuyerToken,
+  });
+  const walletBefore = await call('GET', '/customer/wallet', { token: chatBuyerToken });
+  const create = await call('POST', '/customer/subscriptions', {
+    body: {
+      kitchenId,
+      planName: 'Wallet Bespoke Plan',
+      foodType: 'VEG',
+      mealsPerDay: 1,
+      deliveryDays: days,
+      deliveryTime: 'LUNCH',
+      billingCycle: 'WEEKLY',
+      addressId: custAddressId,
+      paymentMethod: 'WALLET',
+    },
+    token: chatBuyerToken,
+  });
+  bespokeWalletSubId = create.data?.id;
+  const walletAfter = await call('GET', '/customer/wallet', { token: chatBuyerToken });
+  const expectedPrice = 90 * 1 * days.length;
+  expect(
+    quote.status === 200 &&
+      quote.data?.pricePerCycle === expectedPrice &&
+      create.status === 201 &&
+      create.data?.pricePerCycle === expectedPrice &&
+      create.data?.billingHistory?.length === 1 &&
+      create.data?.billingHistory?.[0]?.amount === expectedPrice &&
+      walletAfter.data?.balanceRs === walletBefore.data?.balanceRs - expectedPrice,
+    `quote pricePerCycle=${quote.data?.pricePerCycle} (expected ${expectedPrice}) · created pricePerCycle=${create.data?.pricePerCycle} · eager billing event=${create.data?.billingHistory?.length} row(s) at ₹${create.data?.billingHistory?.[0]?.amount} · wallet debited=${walletBefore.data?.balanceRs - walletAfter.data?.balanceRs}`,
+  );
+}
+
+step(82, 'Bespoke Subscription via WALLET: the kitchen rejecting a still-PENDING request refunds the reserved charge');
+{
+  const walletBefore = await call('GET', '/customer/wallet', { token: chatBuyerToken });
+  const reject = await call('POST', `/partner/subscriptions/${bespokeWalletSubId}/reject`, { body: { reason: 'Outside our delivery zone right now' } });
+  const walletAfter = await call('GET', '/customer/wallet', { token: chatBuyerToken });
+  expect(
+    reject.status === 200 && reject.data?.status === 'REJECTED' && walletAfter.data?.balanceRs > walletBefore.data?.balanceRs,
+    `reject → HTTP ${reject.status} status=${reject.data?.status} · wallet before=${walletBefore.data?.balanceRs} after=${walletAfter.data?.balanceRs} (must increase)`,
+  );
+}
+
+step(83, 'Customer-initiated pause/resume on the kitchen-plan subscription approved in step 77');
+{
+  const pause = await call('POST', `/customer/subscriptions/${planSubId}/pause`, { body: {}, token: chatBuyerToken });
+  const resume = await call('POST', `/customer/subscriptions/${planSubId}/resume`, { token: chatBuyerToken });
+  expect(
+    pause.status === 200 && pause.data?.status === 'PAUSED' && resume.status === 200 && resume.data?.status === 'ACTIVE',
+    `pause → ${pause.data?.status} · resume → ${resume.data?.status}`,
+  );
+}
+
+step(84, 'Customer-initiated timed pause sets pausedUntil correctly ("vacation mode" for one subscription)');
+{
+  const pause = await call('POST', `/customer/subscriptions/${planSubId}/pause`, { body: { days: 5 }, token: chatBuyerToken });
+  const detail = await call('GET', `/customer/subscriptions/${planSubId}`, { token: chatBuyerToken });
+  const expectedMs = new Date().getTime() + 5 * 86_400_000;
+  const actualMs = detail.data?.pausedUntil ? new Date(detail.data.pausedUntil).getTime() : 0;
+  const within2Days = Math.abs(actualMs - expectedMs) < 2 * 86_400_000; // loose bound around IST/UTC day-boundary rounding
+  await call('POST', `/customer/subscriptions/${planSubId}/resume`, { token: chatBuyerToken }); // clean up for later steps
+  expect(
+    pause.status === 200 && pause.data?.pausedUntil && within2Days,
+    `pausedUntil=${detail.data?.pausedUntil} (expected ~5 days out)`,
+  );
+}
+
+step(85, '"Vacation mode": bulk-pause every one of the customer\'s active subscriptions at once');
+{
+  const bulk = await call('POST', '/customer/subscriptions/pause-all', { body: { days: 7 }, token: chatBuyerToken });
+  const resume = await call('POST', `/customer/subscriptions/${planSubId}/resume`, { token: chatBuyerToken }); // clean up for step 86
+  expect(
+    bulk.status === 200 && bulk.data?.pausedCount >= 1 && resume.status === 200 && resume.data?.status === 'ACTIVE',
+    `pausedCount=${bulk.data?.pausedCount} (expected >=1) · cleanup resume → ${resume.data?.status}`,
+  );
+}
+
+step(86, 'Dish swap: a customer can swap a SCHEDULED delivery to another of the same kitchen\'s dishes, but not to a nonexistent one');
+{
+  const detail = await call('GET', `/customer/subscriptions/${planSubId}`, { token: chatBuyerToken });
+  const scheduled = detail.data?.deliverySchedule?.find((d) => d.status === 'SCHEDULED');
+  const dateStr = scheduled ? new Date(scheduled.date).toISOString().slice(0, 10) : null;
+
+  const bad = dateStr
+    ? await call('POST', `/customer/subscriptions/${planSubId}/deliveries/${dateStr}/meal`, {
+        body: { mealId: '00000000-0000-0000-0000-000000000000' },
+        token: chatBuyerToken,
+      })
+    : { status: 0 };
+  const good = dateStr
+    ? await call('POST', `/customer/subscriptions/${planSubId}/deliveries/${dateStr}/meal`, { body: { mealId }, token: chatBuyerToken })
+    : { status: 0 };
+
+  expect(
+    !!dateStr && bad.status === 400 && good.status === 200 && good.data?.mealId === mealId,
+    `scheduled delivery found=${!!dateStr} · nonexistent meal → HTTP ${bad.status} · real meal → HTTP ${good.status}, mealId=${good.data?.mealId}`,
   );
 }
 

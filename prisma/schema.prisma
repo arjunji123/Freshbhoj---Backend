@@ -39,6 +39,7 @@ enum CoinTransactionReason {
   REFERRAL_REFERRER_BONUS
   REFERRAL_REFEREE_BONUS
   ORDER_REDEMPTION
+  SUBSCRIPTION_REDEMPTION
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -92,11 +93,13 @@ model User {
   reelLikes              ReelLike[]
   reelSaves              ReelSave[]
   savedCards             SavedCard[]
+  upiIds                 UpiId[]
   storyViews             KitchenStoryView[]
   storyLikes             KitchenStoryLike[]
   ownedKitchens          Kitchen[]               @relation("KitchenOwner")
   notificationPreference NotificationPreference?
   subscriptions          Subscription[]
+  wallet                 CustomerWallet?
 
   @@map("users")
 }
@@ -402,6 +405,7 @@ model Kitchen {
   holidayOverrides    KitchenHolidayOverride[]
   reelCampaigns       ReelCampaign[]
   subscriptions       Subscription[]
+  subscriptionPlans   SubscriptionPlan[]
   wallet              KitchenWallet?
   premiumSubscription KitchenPremiumSubscription?
   campaignSuggestions CampaignSuggestion[]
@@ -563,13 +567,14 @@ model Meal {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  customizationGroups MealCustomizationGroup[]
-  cartItems           CartItem[]
-  orderItems          OrderItem[]
-  reviews             Review[]
-  reels               Reel[]
-  stories             KitchenStory[]
-  favorites           Favorite[]
+  customizationGroups    MealCustomizationGroup[]
+  cartItems              CartItem[]
+  orderItems             OrderItem[]
+  reviews                Review[]
+  reels                  Reel[]
+  stories                KitchenStory[]
+  favorites              Favorite[]
+  subscriptionDeliveries SubscriptionDelivery[]
 
   @@unique([kitchenId, slug])
   @@index([isAvailable, kitchenId])
@@ -646,7 +651,8 @@ model Address {
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt
 
-  orders Order[]
+  orders        Order[]
+  subscriptions Subscription[]
 
   @@index([userId, isDefault])
   @@map("addresses")
@@ -1149,15 +1155,19 @@ model CampaignSuggestion {
 // ─────────────────────────────────────────────────────────────────────────────
 
 model NotificationPreference {
-  id              String   @id @default(uuid())
-  userId          String   @unique
-  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  orderUpdates    Boolean  @default(true)
-  promotions      Boolean  @default(true)
-  newKitchens     Boolean  @default(true)
-  reelActivity    Boolean  @default(false)
-  whatsappUpdates Boolean  @default(true)
-  updatedAt       DateTime @updatedAt
+  id                     String   @id @default(uuid())
+  userId                 String   @unique
+  user                   User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orderUpdates           Boolean  @default(true)
+  promotions             Boolean  @default(true)
+  newKitchens            Boolean  @default(true)
+  reelActivity           Boolean  @default(false)
+  whatsappUpdates        Boolean  @default(true)
+  /// "Get notified before your next subscription cycle begins."
+  subscriptionReminders  Boolean  @default(true)
+  /// "Personalized meal suggestions based on your taste profile."
+  dailyAiRecommendations Boolean  @default(true)
+  updatedAt              DateTime @updatedAt
 
   @@map("notification_preferences")
 }
@@ -1588,12 +1598,36 @@ model Subscription {
   pricePerCycle       Int
   specialInstructions String?
 
+  /// Set when this request was created from a kitchen-authored SubscriptionPlan
+  /// (see below) rather than a customer's bespoke free-form request. Nullable —
+  /// every subscription created before this field existed, and every future
+  /// bespoke request, has no plan.
+  planId String?
+  plan   SubscriptionPlan? @relation(fields: [planId], references: [id])
+
+  /// Only meaningful for a bespoke (no planId) request — the customer's chosen
+  /// delivery address and payment method. Nullable: every plan-based request
+  /// and every pre-existing row created before these fields existed has none.
+  addressId       String?
+  address         Address?      @relation(fields: [addressId], references: [id])
+  /// Frozen copy of the address text at subscribe time, same reasoning as
+  /// pricePerCycle — a later address edit/delete shouldn't rewrite history.
+  addressSnapshot Json?
+  paymentMethod   PaymentMethod @default(UPI)
+  /// FreshBhoj Coins redeemed against the first billing cycle (1 coin = ₹1),
+  /// only ever non-zero when paymentMethod is WALLET — refunded on reject.
+  coinsRedeemed   Int           @default(0)
+
   status          SubscriptionStatus @default(PENDING)
   rejectionReason String?
 
   startDate   DateTime  @db.Date
   approvedAt  DateTime?
   pausedAt    DateTime?
+  /// Set only by a customer-initiated timed pause (vacation mode) — when this
+  /// date has passed, the next read auto-resumes the subscription. A kitchen's
+  /// indefinite pause (or a customer's own indefinite pause) leaves this null.
+  pausedUntil DateTime? @db.Date
   cancelledAt DateTime?
 
   createdAt DateTime @default(now())
@@ -1607,6 +1641,48 @@ model Subscription {
   @@map("subscriptions")
 }
 
+/// A kitchen-authored, reusable subscription plan template (e.g. "Weekly
+/// Plan" — fixed price, day count, and a menu of diet/delivery-slot options
+/// the customer picks from) that customers browse on the kitchen's public
+/// profile and subscribe to. Distinct from a bespoke `Subscription` request:
+/// a plan is the kitchen's own published offer, not any one customer's ask.
+/// Subscribing still creates a normal PENDING `Subscription` row (via
+/// `planId` above) that goes through the exact same approve/reject flow —
+/// this model only supplies the template, it never bypasses that gate.
+model SubscriptionPlan {
+  id        String  @id @default(uuid())
+  kitchenId String
+  kitchen   Kitchen @relation(fields: [kitchenId], references: [id], onDelete: Cascade)
+
+  name                String
+  billingCycle        SubscriptionBillingCycle
+  deliveryDays        DayOfWeek[]
+  mealsPerDay         Int                      @default(1)
+  /// The actual, discounted price customers pay. `originalPriceRs`, when set
+  /// and higher, drives the mockup's struck-through MRP + discount badge.
+  priceRs             Int
+  originalPriceRs     Int?
+  /// Which FoodType choices this plan offers — the customer picks one at
+  /// subscribe time, constrained to this list.
+  dietOptions         FoodType[]
+  jainAvailable       Boolean                  @default(false)
+  /// Which delivery-time choices this plan offers — same idea as dietOptions.
+  slotOptions         MealSlot[]
+  includesDescription String
+  isPopular           Boolean                  @default(false)
+  /// Soft-hide only — no delete endpoint, so a plan with existing subscribers
+  /// can be retired from the public browse list without breaking their FK.
+  isActive            Boolean                  @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  subscriptions Subscription[]
+
+  @@index([kitchenId, isActive])
+  @@map("subscription_plans")
+}
+
 /// One row per (subscription, delivery date) — a rolling 7-day window is
 /// lazily backfilled on every `GET /partner/subscriptions/:id` while ACTIVE.
 model SubscriptionDelivery {
@@ -1617,6 +1693,11 @@ model SubscriptionDelivery {
   status         DeliveryScheduleStatus @default(SCHEDULED)
   dispatchedAt   DateTime?
   skipReason     String?
+  /// Which specific dish is scheduled for this delivery — set by the
+  /// customer's own "swap dish" action (see CustomerSubscriptionsService).
+  /// Null means "kitchen's choice / not yet swapped."
+  mealId         String?
+  meal           Meal?                  @relation(fields: [mealId], references: [id])
   createdAt      DateTime               @default(now())
 
   @@unique([subscriptionId, date])
@@ -1637,6 +1718,94 @@ model SubscriptionBillingEvent {
 
   @@unique([subscriptionId, cycleStart])
   @@map("subscription_billing_events")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CUSTOMER WALLET — a real prepaid balance for the customer app, structurally
+// identical to KitchenWallet/WalletTransaction above but a completely separate
+// model family (different owner, different reasons) — deliberately NOT the
+// same table as the kitchen wallet, and deliberately NOT merged with the
+// existing User.coinsBalance/CoinTransaction system (coins are earned-only
+// loyalty currency spent as an order discount; this is real rupees the
+// customer can add and withdraw).
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum CustomerWalletTransactionType {
+  CREDIT
+  DEBIT
+}
+
+enum CustomerWalletTransactionReason {
+  TOPUP
+  ORDER_PAYMENT
+  SUBSCRIPTION_PAYMENT
+  WITHDRAWAL
+  REFUND
+}
+
+model CustomerWallet {
+  id        String   @id @default(uuid())
+  userId    String   @unique
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  balanceRs Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  transactions CustomerWalletTransaction[]
+  withdrawals  CustomerWalletWithdrawal[]
+
+  @@map("customer_wallets")
+}
+
+model CustomerWalletTransaction {
+  id          String                          @id @default(uuid())
+  walletId    String
+  wallet      CustomerWallet                  @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  type        CustomerWalletTransactionType
+  reason      CustomerWalletTransactionReason
+  amountRs    Int
+  description String
+  /// The order/subscription/withdrawal this entry is for, when applicable —
+  /// no enforced FK, same reasoning as WalletTransaction.referenceId.
+  referenceId String?
+  createdAt   DateTime                        @default(now())
+
+  @@index([walletId, createdAt])
+  @@map("customer_wallet_transactions")
+}
+
+enum CustomerWalletWithdrawalStatus {
+  REQUESTED
+  PROCESSING
+  PAID
+  FAILED
+}
+
+/// Mirrors Payout exactly (REQUESTED → PROCESSING → PAID/FAILED, advanced by
+/// hand via an ops admin tool, never a gateway) — the balance is debited
+/// immediately at request time (reserves the funds so a customer can't
+/// request more than they have twice over) and refunded via a CustomerWallet
+/// REFUND transaction if an ops admin marks it FAILED.
+model CustomerWalletWithdrawal {
+  id       String                         @id @default(uuid())
+  walletId String
+  wallet   CustomerWallet                 @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  amountRs Int
+  status   CustomerWalletWithdrawalStatus @default(REQUESTED)
+
+  /// Ad-hoc UPI ID / bank details typed once per request — no persistent
+  /// saved-payout-destination entity exists for customers (unlike
+  /// KitchenBankAccount), so this is captured as a snapshot per request.
+  destination Json
+
+  failureReason String?
+
+  requestedAt DateTime  @default(now())
+  processedAt DateTime?
+  paidAt      DateTime?
+
+  @@index([walletId, status])
+  @@map("customer_wallet_withdrawals")
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1795,4 +1964,23 @@ model SavedCard {
   @@unique([userId, gatewayToken])
   @@index([userId, isDefault])
   @@map("saved_cards")
+}
+
+/// A customer-entered UPI VPA — stored as typed, same no-real-verification
+/// placeholder idiom as everywhere else in this codebase (e.g. the customer
+/// wallet withdrawal `destination` snapshot). Distinct from SavedCard, which
+/// assumes a real gateway-tokenised flow (this app has no such SDK wired).
+model UpiId {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  vpa       String
+  label     String?
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, vpa])
+  @@index([userId, isDefault])
+  @@map("upi_ids")
 }

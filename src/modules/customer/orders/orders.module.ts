@@ -8,9 +8,10 @@ import { CouponsModule } from '../../platform/coupons/coupons.module';
 import { ReferralModule } from '../../platform/referral/referral.module';
 import { AddressesModule } from '../addresses/addresses.module';
 import { NotificationsModule } from '../../kitchen/portal/notifications/notifications.module';
+import { CustomerWalletModule } from '../wallet/wallet.module';
 
 @Module({
-  imports: [CartModule, CouponsModule, ReferralModule, AddressesModule, NotificationsModule],
+  imports: [CartModule, CouponsModule, ReferralModule, AddressesModule, NotificationsModule, CustomerWalletModule],
   controllers: [OrdersController, OrderMessagesController],
   providers: [OrdersService, OrderMessagesService],
   exports: [OrdersService],

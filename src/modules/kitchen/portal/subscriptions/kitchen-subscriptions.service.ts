@@ -1,9 +1,11 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import {
+  CoinTransactionReason,
   DayOfWeek,
   DeliveryScheduleStatus,
   KitchenStatus,
   NotificationCategory,
+  PaymentMethod,
   Prisma,
   Subscription,
   SubscriptionBillingCycle,
@@ -11,6 +13,9 @@ import {
 } from '@prisma/client';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { CustomerWalletService } from '../../../customer/wallet/wallet.service';
+import { ReferralService } from '../../../platform/referral/referral.service';
+import { AddressesService } from '../../../customer/addresses/addresses.service';
 import { getIstCalendarDate, getIstDayOfWeek } from '../../../../common/utils/kitchen';
 import { paginate, toSkip } from '../../../../common/dto/pagination.dto';
 import { CreateSubscriptionDto } from '../../../customer/subscriptions/dto/customer-subscriptions.dto';
@@ -52,6 +57,9 @@ export class KitchenSubscriptionsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly notificationsService: NotificationsService,
+    private readonly customerWalletService: CustomerWalletService,
+    private readonly referralService: ReferralService,
+    private readonly addressesService: AddressesService,
   ) {}
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -66,7 +74,7 @@ export class KitchenSubscriptionsService {
       ...(q ? { user: { fullName: { contains: q, mode: 'insensitive' } } } : {}),
     };
 
-    const [rows, total, grouped] = await Promise.all([
+    const [rawRows, total, grouped] = await Promise.all([
       this.prisma.subscription.findMany({
         where,
         orderBy: { createdAt: 'desc' },
@@ -77,6 +85,7 @@ export class KitchenSubscriptionsService {
       this.prisma.subscription.count({ where }),
       this.prisma.subscription.groupBy({ by: ['status'], where: { kitchenId: kitchen.id }, _count: { _all: true } }),
     ]);
+    const rows = await Promise.all(rawRows.map((r) => this.settlePauseIfNeeded(r)));
 
     const counts = Object.fromEntries(Object.values(SubscriptionStatus).map((s) => [s, 0])) as Record<SubscriptionStatus, number>;
     grouped.forEach((g) => {
@@ -88,7 +97,8 @@ export class KitchenSubscriptionsService {
 
   async findOne(accountId: string, id: string) {
     const kitchen = await this.requireKitchen(accountId);
-    const sub = await this.requireOwned(kitchen.id, id);
+    let sub = await this.requireOwned(kitchen.id, id);
+    sub = await this.settlePauseIfNeeded(sub);
     if (sub.status === SubscriptionStatus.ACTIVE) {
       await this.backfillDeliveries(sub);
       await this.backfillBilling(sub);
@@ -118,6 +128,32 @@ export class KitchenSubscriptionsService {
     if (sub.status !== SubscriptionStatus.PENDING) {
       throw new BadRequestException(`Cannot reject a subscription that is ${sub.status}`);
     }
+
+    // A wallet-paid bespoke request reserves the first cycle's payment (and
+    // any coins) at request time — a PENDING subscription was never approved,
+    // so a reject here must reverse that charge, not keep it.
+    if (sub.paymentMethod === PaymentMethod.WALLET) {
+      const firstBillingEvent = await this.prisma.subscriptionBillingEvent.findFirst({
+        where: { subscriptionId: sub.id },
+        orderBy: { cycleStart: 'asc' },
+      });
+      await this.prisma.$transaction(async (tx) => {
+        if (firstBillingEvent) {
+          await this.customerWalletService.credit(sub.userId, firstBillingEvent.amount, 'REFUND', {
+            description: `Subscription request declined — refunded`,
+            referenceId: sub.id,
+            tx,
+          });
+        }
+        if (sub.coinsRedeemed > 0) {
+          await tx.user.update({ where: { id: sub.userId }, data: { coinsBalance: { increment: sub.coinsRedeemed } } });
+          await tx.coinTransaction.create({
+            data: { userId: sub.userId, amount: sub.coinsRedeemed, reason: CoinTransactionReason.SUBSCRIPTION_REDEMPTION },
+          });
+        }
+      });
+    }
+
     const updated = await this.prisma.subscription.update({
       where: { id },
       data: { status: SubscriptionStatus.REJECTED, rejectionReason: reason },
@@ -189,24 +225,134 @@ export class KitchenSubscriptionsService {
       throw new BadRequestException('This kitchen is not accepting subscriptions right now');
     }
 
-    const weeklyPrice = PRICE_PER_MEAL_RS * dto.mealsPerDay * dto.deliveryDays.length;
-    const pricePerCycle = dto.billingCycle === SubscriptionBillingCycle.MONTHLY ? weeklyPrice * MONTHLY_CYCLE_WEEKS : weeklyPrice;
+    let planName: string;
+    let mealsPerDay: number;
+    let deliveryDays: DayOfWeek[];
+    let billingCycle: SubscriptionBillingCycle;
+    let pricePerCycle: number;
+    let specialInstructions = dto.specialInstructions;
+    let planId: string | undefined;
 
-    const sub = await this.prisma.subscription.create({
-      data: {
-        userId,
-        kitchenId: kitchen.id,
-        planName: dto.planName,
-        foodType: dto.foodType,
-        mealsPerDay: dto.mealsPerDay,
-        deliveryDays: dto.deliveryDays,
-        deliveryTime: dto.deliveryTime,
-        billingCycle: dto.billingCycle,
-        pricePerCycle,
-        specialInstructions: dto.specialInstructions,
-        startDate: dto.startDate ? new Date(dto.startDate) : getIstCalendarDate(),
-      },
-      include: { kitchen: { select: { id: true, name: true, logoUrl: true, slug: true } } },
+    if (dto.planId) {
+      // Subscribing from a kitchen-authored plan — the plan supplies the
+      // terms (name/cadence/price), the customer only picks among the
+      // diet/slot options the kitchen actually offered for it.
+      const plan = await this.prisma.subscriptionPlan.findUnique({ where: { id: dto.planId } });
+      if (!plan || plan.kitchenId !== kitchen.id || !plan.isActive) {
+        throw new NotFoundException('Subscription plan not found');
+      }
+      if (!plan.dietOptions.includes(dto.foodType)) {
+        throw new BadRequestException(`This plan only offers: ${plan.dietOptions.join(', ')}`);
+      }
+      if (!plan.slotOptions.includes(dto.deliveryTime)) {
+        throw new BadRequestException(`This plan only delivers at: ${plan.slotOptions.join(', ')}`);
+      }
+      if (dto.jainRequested && !plan.jainAvailable) {
+        throw new BadRequestException('This plan does not offer a Jain-style option');
+      }
+
+      planName = plan.name;
+      mealsPerDay = plan.mealsPerDay;
+      deliveryDays = plan.deliveryDays;
+      billingCycle = plan.billingCycle;
+      pricePerCycle = plan.priceRs;
+      planId = plan.id;
+      if (dto.jainRequested) {
+        specialInstructions = [specialInstructions, 'Jain-style requested (no onion/garlic/root vegetables).'].filter(Boolean).join(' ');
+      }
+    } else {
+      // Bespoke request — every field below is guaranteed present by the
+      // DTO's @ValidateIf(!planId) rules.
+      planName = dto.planName!;
+      mealsPerDay = dto.mealsPerDay!;
+      deliveryDays = dto.deliveryDays!;
+      billingCycle = dto.billingCycle!;
+      pricePerCycle = this.computeBespokePrice(mealsPerDay, deliveryDays, billingCycle);
+    }
+
+    const paymentMethod = dto.paymentMethod ?? PaymentMethod.UPI;
+    const startDate = dto.startDate ? new Date(dto.startDate) : getIstCalendarDate();
+
+    let address: { id: string; label: string; customLabel: string | null; receiverName: string | null; receiverPhone: string | null; line1: string; line2: string | null; landmark: string | null; locality: string | null; city: string; state: string; pincode: string; latitude: number | null; longitude: number | null } | null = null;
+    if (dto.addressId) {
+      address = await this.addressesService.findOne(userId, dto.addressId);
+    }
+
+    // Only WALLET payments are a real charge in this system today — a coin
+    // discount only ever makes sense against a real charge, so it's only
+    // offered on that path. UPI/CARD/COD keep the exact pre-existing
+    // behaviour: full pricePerCycle, no coins, and the first billing event is
+    // created later (at the full price) by the normal approve-time backfill.
+    const isWallet = paymentMethod === PaymentMethod.WALLET;
+    let coinsRedeemed = 0;
+    let firstCycleAmount = pricePerCycle;
+    if (isWallet) {
+      const coins = await this.referralService.evaluateRedemption(userId, pricePerCycle, dto.requestedCoins ?? 0);
+      coinsRedeemed = coins.redeemed;
+      firstCycleAmount = pricePerCycle - coins.discount;
+    }
+
+    const sub = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.subscription.create({
+        data: {
+          userId,
+          kitchenId: kitchen.id,
+          planId,
+          planName,
+          foodType: dto.foodType,
+          mealsPerDay,
+          deliveryDays,
+          deliveryTime: dto.deliveryTime,
+          billingCycle,
+          pricePerCycle,
+          specialInstructions,
+          startDate,
+          paymentMethod,
+          coinsRedeemed,
+          ...(address && {
+            addressId: address.id,
+            addressSnapshot: {
+              label: address.label,
+              customLabel: address.customLabel,
+              receiverName: address.receiverName,
+              receiverPhone: address.receiverPhone,
+              line1: address.line1,
+              line2: address.line2,
+              landmark: address.landmark,
+              locality: address.locality,
+              city: address.city,
+              state: address.state,
+              pincode: address.pincode,
+              latitude: address.latitude,
+              longitude: address.longitude,
+            } as Prisma.InputJsonValue,
+          }),
+        },
+        include: { kitchen: { select: { id: true, name: true, logoUrl: true, slug: true } } },
+      });
+
+      if (isWallet) {
+        // The debit *is* the payment — insufficient balance throws here and
+        // rolls back the whole subscription creation, same as every other
+        // wallet-funded charge in this codebase.
+        await this.customerWalletService.debit(userId, firstCycleAmount, 'SUBSCRIPTION_PAYMENT', {
+          referenceId: created.id,
+          description: `${planName} — first cycle`,
+          tx,
+        });
+        if (coinsRedeemed > 0) {
+          await this.debitCoins(tx, userId, coinsRedeemed);
+        }
+        // Plants the discounted amount for cycle 1 *before* any later
+        // approve/resume-triggered backfill can otherwise create it at the
+        // full pricePerCycle — backfillBilling's skipDuplicates then no-ops
+        // on this same [subscriptionId, cycleStart] row forever.
+        await tx.subscriptionBillingEvent.create({
+          data: { subscriptionId: created.id, cycleStart: startDate, amount: firstCycleAmount },
+        });
+      }
+
+      return created;
     });
 
     if (kitchen.accountId) {
@@ -214,7 +360,7 @@ export class KitchenSubscriptionsService {
         kitchen.accountId,
         NotificationCategory.SUBSCRIPTION,
         'New subscription request',
-        `${dto.planName} — ${dto.mealsPerDay} meal(s)/day, ${dto.deliveryDays.length} day(s)/week. Tap to review.`,
+        `${planName} — ${mealsPerDay} meal(s)/day, ${deliveryDays.length} day(s)/week. Tap to review.`,
         { subscriptionId: sub.id },
       );
     }
@@ -223,31 +369,27 @@ export class KitchenSubscriptionsService {
   }
 
   async listForCustomer(userId: string) {
-    const rows = await this.prisma.subscription.findMany({
+    const rawRows = await this.prisma.subscription.findMany({
       where: { userId },
       orderBy: { createdAt: 'desc' },
       include: { kitchen: { select: { id: true, name: true, logoUrl: true, slug: true } } },
     });
+    const rows = await Promise.all(rawRows.map((r) => this.settlePauseIfNeeded(r)));
     return rows.map((r) => this.toSummaryDto(r));
   }
 
   async findOneForCustomer(userId: string, id: string) {
-    const sub = await this.prisma.subscription.findUnique({
-      where: { id },
-      include: { kitchen: { select: { id: true, name: true, logoUrl: true, slug: true } } },
-    });
-    if (!sub) throw new NotFoundException('Subscription not found');
-    if (sub.userId !== userId) throw new ForbiddenException('This subscription does not belong to you');
+    let sub = await this.requireOwnedByCustomer(userId, id);
+    sub = await this.settlePauseIfNeeded(sub);
+    if (sub.status === SubscriptionStatus.ACTIVE) {
+      await this.backfillDeliveries(sub);
+      await this.backfillBilling(sub);
+    }
     return this.toDetailDto(sub);
   }
 
   async cancelForCustomer(userId: string, id: string) {
-    const sub = await this.prisma.subscription.findUnique({
-      where: { id },
-      include: { kitchen: { select: { id: true, name: true, logoUrl: true, slug: true } } },
-    });
-    if (!sub) throw new NotFoundException('Subscription not found');
-    if (sub.userId !== userId) throw new ForbiddenException('This subscription does not belong to you');
+    const sub = await this.requireOwnedByCustomer(userId, id);
     if (sub.status === SubscriptionStatus.CANCELLED || sub.status === SubscriptionStatus.REJECTED) {
       return this.toDetailDto(sub);
     }
@@ -257,6 +399,110 @@ export class KitchenSubscriptionsService {
       include: { kitchen: { select: { id: true, name: true, logoUrl: true, slug: true } } },
     });
     return this.toDetailDto(updated);
+  }
+
+  /** Read-only server-computed price preview for the setup wizard — never trust a client-computed total. */
+  async quoteForCustomer(userId: string, dto: { kitchenId: string; planId?: string; mealsPerDay?: number; deliveryDays?: DayOfWeek[]; billingCycle?: SubscriptionBillingCycle; requestedCoins?: number; paymentMethod?: PaymentMethod }) {
+    let pricePerCycle: number;
+    if (dto.planId) {
+      const plan = await this.prisma.subscriptionPlan.findUnique({ where: { id: dto.planId } });
+      if (!plan || plan.kitchenId !== dto.kitchenId || !plan.isActive) {
+        throw new NotFoundException('Subscription plan not found');
+      }
+      pricePerCycle = plan.priceRs;
+    } else {
+      if (!dto.mealsPerDay || !dto.deliveryDays?.length || !dto.billingCycle) {
+        throw new BadRequestException('mealsPerDay, deliveryDays, and billingCycle are required for a bespoke quote');
+      }
+      pricePerCycle = this.computeBespokePrice(dto.mealsPerDay, dto.deliveryDays, dto.billingCycle);
+    }
+
+    const isWallet = dto.paymentMethod === PaymentMethod.WALLET;
+    const coins = isWallet
+      ? await this.referralService.evaluateRedemption(userId, pricePerCycle, dto.requestedCoins ?? 0)
+      : { balance: 0, eligible: false, maxRedeemable: 0, redeemed: 0, discount: 0, invalidReason: null };
+
+    return {
+      pricePerCycle,
+      coinsDiscount: coins.discount,
+      firstCycleAmount: pricePerCycle - coins.discount,
+      coinsBalance: coins.balance,
+      coinsEligible: coins.eligible,
+      maxRedeemableCoins: coins.maxRedeemable,
+    };
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // CUSTOMER-FACING — pause / resume / vacation mode / dish swap
+  // ──────────────────────────────────────────────────────────────────────────
+
+  async pauseForCustomer(userId: string, id: string, days?: number) {
+    const sub = await this.requireOwnedByCustomer(userId, id);
+    if (sub.status !== SubscriptionStatus.ACTIVE) {
+      throw new BadRequestException(`Cannot pause a subscription that is ${sub.status}`);
+    }
+    const pausedUntil = days ? new Date(getIstCalendarDate().getTime() + days * DAY_MS) : null;
+    const updated = await this.prisma.subscription.update({
+      where: { id },
+      data: { status: SubscriptionStatus.PAUSED, pausedAt: new Date(), pausedUntil },
+      include: { kitchen: { select: { id: true, name: true, logoUrl: true, slug: true } } },
+    });
+    return this.toDetailDto(updated);
+  }
+
+  async resumeForCustomer(userId: string, id: string) {
+    const sub = await this.requireOwnedByCustomer(userId, id);
+    if (sub.status !== SubscriptionStatus.PAUSED) {
+      throw new BadRequestException(`Cannot resume a subscription that is ${sub.status}`);
+    }
+    const updated = await this.prisma.subscription.update({
+      where: { id },
+      data: { status: SubscriptionStatus.ACTIVE, pausedAt: null, pausedUntil: null },
+      include: { kitchen: { select: { id: true, name: true, logoUrl: true, slug: true } } },
+    });
+    await this.backfillDeliveries(updated);
+    await this.backfillBilling(updated);
+    return this.toDetailDto(updated);
+  }
+
+  /** "Vacation mode" — pauses every one of the customer's own ACTIVE subscriptions at once. */
+  async bulkPauseForCustomer(userId: string, days: number) {
+    const pausedUntil = new Date(getIstCalendarDate().getTime() + days * DAY_MS);
+    const result = await this.prisma.subscription.updateMany({
+      where: { userId, status: SubscriptionStatus.ACTIVE },
+      data: { status: SubscriptionStatus.PAUSED, pausedAt: new Date(), pausedUntil },
+    });
+    return { pausedCount: result.count, pausedUntil };
+  }
+
+  async swapDeliveryMeal(userId: string, subscriptionId: string, date: string, mealId: string) {
+    const sub = await this.requireOwnedByCustomer(userId, subscriptionId);
+
+    const requestedDate = new Date(date);
+    if (Number.isNaN(requestedDate.getTime())) {
+      throw new BadRequestException('Invalid date');
+    }
+    const delivery = await this.prisma.subscriptionDelivery.findUnique({
+      where: { subscriptionId_date: { subscriptionId, date: requestedDate } },
+    });
+    if (!delivery) throw new NotFoundException('No delivery scheduled for that date');
+    if (delivery.status !== DeliveryScheduleStatus.SCHEDULED) {
+      throw new BadRequestException(`This delivery is already ${delivery.status}`);
+    }
+
+    const meal = await this.prisma.meal.findUnique({ where: { id: mealId }, select: { id: true, kitchenId: true, isAvailable: true } });
+    if (!meal || meal.kitchenId !== sub.kitchenId) {
+      throw new BadRequestException('That dish is not on this kitchen’s menu');
+    }
+    if (!meal.isAvailable) {
+      throw new BadRequestException('That dish is not currently available');
+    }
+
+    return this.prisma.subscriptionDelivery.update({
+      where: { id: delivery.id },
+      data: { mealId },
+      include: { meal: { select: { id: true, name: true, images: true } } },
+    });
   }
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -330,6 +576,52 @@ export class KitchenSubscriptionsService {
     return kitchen;
   }
 
+  private async requireOwnedByCustomer(userId: string, id: string): Promise<SubWithKitchen> {
+    const sub = await this.prisma.subscription.findUnique({
+      where: { id },
+      include: { kitchen: { select: { id: true, name: true, logoUrl: true, slug: true } } },
+    });
+    if (!sub) throw new NotFoundException('Subscription not found');
+    if (sub.userId !== userId) throw new ForbiddenException('This subscription does not belong to you');
+    return sub;
+  }
+
+  /** Flat per-meal formula — the only pricing path left once a kitchen has no authored plan for this request. */
+  private computeBespokePrice(mealsPerDay: number, deliveryDays: DayOfWeek[], billingCycle: SubscriptionBillingCycle): number {
+    const weeklyPrice = PRICE_PER_MEAL_RS * mealsPerDay * deliveryDays.length;
+    return billingCycle === SubscriptionBillingCycle.MONTHLY ? weeklyPrice * MONTHLY_CYCLE_WEEKS : weeklyPrice;
+  }
+
+  /** Mirrors OrdersService's own debitCoins exactly — kept local so this module stays independent. */
+  private async debitCoins(tx: Prisma.TransactionClient, userId: string, amount: number) {
+    const debited = await tx.user.updateMany({
+      where: { id: userId, coinsBalance: { gte: amount } },
+      data: { coinsBalance: { decrement: amount } },
+    });
+    if (debited.count === 0) {
+      throw new ConflictException('Your FreshBhoj Coins balance changed — please try again');
+    }
+    await tx.coinTransaction.create({
+      data: { userId, amount: -amount, reason: CoinTransactionReason.SUBSCRIPTION_REDEMPTION },
+    });
+  }
+
+  /** Auto-resumes a customer-timed pause (vacation mode) once its date has passed — no cron exists, so this runs lazily on every read. */
+  private async settlePauseIfNeeded<T extends Subscription>(sub: T): Promise<T> {
+    if (sub.status !== SubscriptionStatus.PAUSED || !sub.pausedUntil) return sub;
+    const today = getIstCalendarDate();
+    if (sub.pausedUntil.getTime() > today.getTime()) return sub;
+
+    const updated = await this.prisma.subscription.update({
+      where: { id: sub.id },
+      data: { status: SubscriptionStatus.ACTIVE, pausedAt: null, pausedUntil: null },
+    });
+    const merged = { ...sub, ...updated };
+    await this.backfillDeliveries(merged);
+    await this.backfillBilling(merged);
+    return merged;
+  }
+
   private toSummaryDto(sub: SubWithCustomer | SubWithKitchen) {
     return {
       id: sub.id,
@@ -340,10 +632,12 @@ export class KitchenSubscriptionsService {
       deliveryTime: sub.deliveryTime,
       billingCycle: sub.billingCycle,
       pricePerCycle: sub.pricePerCycle,
+      paymentMethod: sub.paymentMethod,
       status: sub.status,
       startDate: sub.startDate,
       approvedAt: sub.approvedAt,
       pausedAt: sub.pausedAt,
+      pausedUntil: sub.pausedUntil,
       cancelledAt: sub.cancelledAt,
       createdAt: sub.createdAt,
       ...('user' in sub && sub.user !== undefined ? { customer: sub.user } : {}),
@@ -353,7 +647,11 @@ export class KitchenSubscriptionsService {
 
   private async toDetailDto(sub: SubWithCustomer | SubWithKitchen) {
     const [deliveries, billingEvents] = await Promise.all([
-      this.prisma.subscriptionDelivery.findMany({ where: { subscriptionId: sub.id }, orderBy: { date: 'asc' } }),
+      this.prisma.subscriptionDelivery.findMany({
+        where: { subscriptionId: sub.id },
+        orderBy: { date: 'asc' },
+        include: { meal: { select: { id: true, name: true, images: true } } },
+      }),
       this.prisma.subscriptionBillingEvent.findMany({ where: { subscriptionId: sub.id }, orderBy: { cycleStart: 'desc' } }),
     ]);
 
@@ -361,7 +659,13 @@ export class KitchenSubscriptionsService {
       ...this.toSummaryDto(sub),
       specialInstructions: sub.specialInstructions,
       rejectionReason: sub.rejectionReason,
-      deliverySchedule: deliveries.map((d) => ({ date: d.date, status: d.status, dispatchedAt: d.dispatchedAt, skipReason: d.skipReason })),
+      deliverySchedule: deliveries.map((d) => ({
+        date: d.date,
+        status: d.status,
+        dispatchedAt: d.dispatchedAt,
+        skipReason: d.skipReason,
+        meal: d.meal,
+      })),
       billingHistory: billingEvents.map((b) => ({ cycleStart: b.cycleStart, amount: b.amount, paymentStatus: b.paymentStatus })),
     };
   }

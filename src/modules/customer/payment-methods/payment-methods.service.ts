@@ -1,7 +1,7 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { CardBrand, SavedCard } from '@prisma/client';
+import { CardBrand, SavedCard, UpiId } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
-import { SaveCardDto } from './dto/payment-method.dto';
+import { AddUpiIdDto, SaveCardDto } from './dto/payment-method.dto';
 
 @Injectable()
 export class PaymentMethodsService {
@@ -87,6 +87,75 @@ export class PaymentMethodsService {
     if (!card) throw new NotFoundException('Card not found');
     if (card.userId !== userId) throw new ForbiddenException('This card does not belong to you');
     return card;
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // UPI IDs — same shape/behaviour as cards above, minus the gateway token
+  // ──────────────────────────────────────────────────────────────────────────
+
+  async findAllUpi(userId: string) {
+    const rows = await this.prisma.upiId.findMany({
+      where: { userId },
+      orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }],
+    });
+    return rows.map((row) => this.toUpiDto(row));
+  }
+
+  async addUpi(userId: string, dto: AddUpiIdDto) {
+    const count = await this.prisma.upiId.count({ where: { userId } });
+    const shouldBeDefault = dto.isDefault === true || count === 0;
+
+    const row = await this.prisma.$transaction(async (tx) => {
+      if (shouldBeDefault) {
+        await tx.upiId.updateMany({ where: { userId }, data: { isDefault: false } });
+      }
+      return tx.upiId.upsert({
+        where: { userId_vpa: { userId, vpa: dto.vpa } },
+        update: { label: dto.label, isDefault: shouldBeDefault },
+        create: { userId, vpa: dto.vpa, label: dto.label, isDefault: shouldBeDefault },
+      });
+    });
+    return this.toUpiDto(row);
+  }
+
+  async setDefaultUpi(userId: string, id: string) {
+    await this.assertOwnedUpi(userId, id);
+    const row = await this.prisma.$transaction(async (tx) => {
+      await tx.upiId.updateMany({ where: { userId }, data: { isDefault: false } });
+      return tx.upiId.update({ where: { id }, data: { isDefault: true } });
+    });
+    return this.toUpiDto(row);
+  }
+
+  async removeUpi(userId: string, id: string) {
+    const row = await this.assertOwnedUpi(userId, id);
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.upiId.delete({ where: { id } });
+      if (row.isDefault) {
+        const next = await tx.upiId.findFirst({ where: { userId }, orderBy: { createdAt: 'desc' }, select: { id: true } });
+        if (next) await tx.upiId.update({ where: { id: next.id }, data: { isDefault: true } });
+      }
+    });
+
+    return { id };
+  }
+
+  private async assertOwnedUpi(userId: string, id: string): Promise<UpiId> {
+    const row = await this.prisma.upiId.findUnique({ where: { id } });
+    if (!row) throw new NotFoundException('UPI ID not found');
+    if (row.userId !== userId) throw new ForbiddenException('This UPI ID does not belong to you');
+    return row;
+  }
+
+  private toUpiDto(row: UpiId) {
+    return {
+      id: row.id,
+      vpa: row.vpa,
+      label: row.label,
+      isDefault: row.isDefault,
+      createdAt: row.createdAt,
+    };
   }
 
   private toDto(card: SavedCard) {

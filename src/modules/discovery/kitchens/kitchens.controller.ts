@@ -13,6 +13,7 @@ import {
   KitchenCardDto,
   KitchenDetailDto,
   KitchenMediaDto,
+  SubscriptionPlanCardDto,
 } from './dto/kitchens.response.dto';
 import {
   ApiEnvelope,
@@ -89,6 +90,15 @@ export class KitchensController {
       message: 'Menu fetched',
       data: await this.kitchensService.getMenu(id, query.page, query.limit ?? 30, user?.id),
     };
+  }
+
+  @Public()
+  @Get(':id/subscription-plans')
+  @ApiOperation({ summary: "This kitchen's active subscription plans, browsable and subscribable" })
+  @ApiEnvelopeArray(SubscriptionPlanCardDto)
+  @ApiEnvelopeError(404, 'Kitchen not found')
+  async subscriptionPlans(@Param('id', ParseUUIDPipe) id: string) {
+    return { message: 'Plans fetched', data: await this.kitchensService.getSubscriptionPlans(id) };
   }
 
   @Post(':id/follow')

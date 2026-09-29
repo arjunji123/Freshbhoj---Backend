@@ -57,3 +57,24 @@ export class SaveCardDto {
   @IsBoolean()
   isDefault?: boolean;
 }
+
+/**
+ * Stored exactly as typed — no gateway/UPI-app verification is wired (same
+ * placeholder idiom as the wallet withdrawal `destination` snapshot).
+ */
+export class AddUpiIdDto {
+  @ApiProperty({ example: 'rahul.sharma@okhdfcbank' })
+  @Matches(/^[\w.+-]{2,256}@[a-zA-Z][\w-]{1,64}$/, { message: 'Enter a valid UPI ID (e.g. name@bank)' })
+  vpa: string;
+
+  @ApiPropertyOptional({ example: 'Google Pay' })
+  @IsOptional()
+  @IsString()
+  @Length(1, 40)
+  label?: string;
+
+  @ApiPropertyOptional({ description: 'Pre-select this UPI ID at checkout' })
+  @IsOptional()
+  @IsBoolean()
+  isDefault?: boolean;
+}

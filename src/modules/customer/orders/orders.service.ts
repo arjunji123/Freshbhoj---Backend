@@ -21,6 +21,7 @@ import { ReferralService } from '../../platform/referral/referral.service';
 import { AddressesService } from '../addresses/addresses.service';
 import { NotificationsService } from '../../kitchen/portal/notifications/notifications.service';
 import { OrderMessagesService } from './order-messages.service';
+import { CustomerWalletService } from '../wallet/wallet.service';
 import { buildPriceBreakdown, generateOrderNumber, PRICING } from '../../../common/utils/pricing';
 import { isKitchenOpenNow } from '../../../common/utils/kitchen';
 import { Paginated, paginate, toSkip } from '../../../common/dto/pagination.dto';
@@ -70,6 +71,7 @@ export class OrdersService {
     private readonly addressesService: AddressesService,
     private readonly notificationsService: NotificationsService,
     private readonly orderMessagesService: OrderMessagesService,
+    private readonly customerWalletService: CustomerWalletService,
   ) {}
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -118,10 +120,14 @@ export class OrdersService {
     const pricing = buildPriceBreakdown(itemsTotal, coupon.discount, coins.discount);
 
     const paymentMethod = dto.paymentMethod ?? PaymentMethod.UPI;
-    // COD skips the gateway and goes straight to PLACED; everything else waits
-    // for /confirm-payment before the kitchen ever sees the order.
+    // COD skips the gateway and goes straight to PLACED (cash changes hands on
+    // delivery); WALLET also goes straight to PLACED — the debit below *is*
+    // the payment, there's no gateway round-trip to wait for. Everything else
+    // waits for /confirm-payment before the kitchen ever sees the order.
     const isCod = paymentMethod === PaymentMethod.COD;
-    const status = isCod ? OrderStatus.PLACED : OrderStatus.PENDING_PAYMENT;
+    const isWallet = paymentMethod === PaymentMethod.WALLET;
+    const isImmediate = isCod || isWallet;
+    const status = isImmediate ? OrderStatus.PLACED : OrderStatus.PENDING_PAYMENT;
 
     const order = await this.prisma.$transaction(async (tx) => {
       const created = await tx.order.create({
@@ -156,12 +162,12 @@ export class OrdersService {
           sourceStoryId: cart.sourceStoryId,
           sourceReelId: cart.sourceReelId,
           paymentMethod,
-          paymentStatus: isCod ? PaymentStatus.PENDING : PaymentStatus.PROCESSING,
+          paymentStatus: isWallet ? PaymentStatus.PAID : isCod ? PaymentStatus.PENDING : PaymentStatus.PROCESSING,
           slotType: dto.slotType ?? DeliverySlotType.NOW,
           scheduledFor: dto.scheduledFor ? new Date(dto.scheduledFor) : null,
           orderNotes: dto.orderNotes,
           etaMinutes: kitchen.prepTimeMins + 15,
-          placedAt: isCod ? new Date() : null,
+          placedAt: isImmediate ? new Date() : null,
           items: {
             create: pricedLines.map(({ item, priced }) => ({
               mealId: item.meal.id,
@@ -178,16 +184,30 @@ export class OrdersService {
               specialInstructions: item.specialInstructions,
             })),
           },
-          ...(isCod && {
+          ...(isImmediate && {
             events: {
-              create: { status: OrderStatus.PLACED, note: 'Order placed (Cash on Delivery)' },
+              create: {
+                status: OrderStatus.PLACED,
+                note: isWallet ? 'Order placed (paid via Wallet)' : 'Order placed (Cash on Delivery)',
+              },
             },
           }),
         },
         include: ORDER_INCLUDE,
       });
 
-      if (isCod) {
+      if (isWallet) {
+        // The debit *is* the payment — insufficient balance throws here and
+        // rolls back the whole order creation, same as every other
+        // wallet-funded charge in this codebase.
+        await this.customerWalletService.debit(userId, pricing.totalAmount, 'ORDER_PAYMENT', {
+          referenceId: created.id,
+          description: `Order #${created.orderNumber}`,
+          tx,
+        });
+      }
+
+      if (isImmediate) {
         await tx.cartItem.deleteMany({ where: { cartId: cart.id } });
         await tx.cart.update({
           where: { id: cart.id },
@@ -213,7 +233,7 @@ export class OrdersService {
     });
 
     this.logger.log(`Order ${order.orderNumber} created for user ${userId} (${status})`);
-    if (isCod) await this.notifyKitchenNewOrder(order);
+    if (isImmediate) await this.notifyKitchenNewOrder(order);
     return this.toOrderDetail(order);
   }
 
