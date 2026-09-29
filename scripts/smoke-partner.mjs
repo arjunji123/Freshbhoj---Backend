@@ -1154,5 +1154,226 @@ step(64, 'Premium: a kitchen with no premium row stays fully unrestricted (backw
   );
 }
 
+// ── 65–66: the REAL admin approve/reject flow — the dev "simulate/approve" ──
+// shortcut (used everywhere above, since NODE_ENV isn't production here) is
+// not the path a real kitchen goes through in production; these two steps
+// exercise the actual `admin/kitchen-accounts` ops-tool endpoints instead.
+async function onboardToUnderReview(label) {
+  const phone = `+9198765${String(Date.now()).slice(-5)}`;
+  await call('POST', '/partner/auth/otp/send', { body: { phone }, token: null });
+  const verify = await call('POST', '/partner/auth/otp/verify', { body: { phone, otp: '123456' }, token: null });
+  const t = verify.data.tokens.accessToken;
+  await call('POST', '/partner/onboarding/owner-details', { body: { ownerName: `${label} Owner` }, token: t });
+  await call('POST', '/partner/onboarding/kitchen-details', { body: { name: `${label} Kitchen ${Date.now()}`, kitchenType: 'HOME_KITCHEN' }, token: t });
+  await call('POST', '/partner/onboarding/location', { body: { addressLine: '1 Admin Test Lane', locality: 'Malviya Nagar', pincode: '302017', latitude: 26.85, longitude: 75.8, serviceRadiusKm: 5 }, token: t });
+  await call('POST', '/partner/onboarding/documents', { body: { type: 'FSSAI', fileUrl: 'https://x/f.pdf' }, token: t });
+  await call('POST', '/partner/onboarding/documents', { body: { type: 'KITCHEN_PHOTO_FRONT', fileUrl: 'https://x/f.jpg' }, token: t });
+  await call('POST', '/partner/onboarding/documents', { body: { type: 'KITCHEN_PHOTO_MAIN', fileUrl: 'https://x/m.jpg' }, token: t });
+  await call('POST', '/partner/onboarding/bank-details', { body: { accountHolderName: `${label} Owner`, accountNumber: '000111222888', ifsc: 'HDFC0001234' }, token: t });
+  await call('POST', '/partner/menu', { body: { name: `${label} Thali`, images: ['https://x/t.jpg'], price: 200, foodType: 'VEG', calories: 400, proteinG: 20, isAvailable: true }, token: t });
+  await call('POST', '/partner/onboarding/submit', { token: t });
+  return { token: t, phone };
+}
+
+step(65, 'Ops: the real admin approve endpoint (not the dev simulate shortcut) takes a kitchen live');
+{
+  const { token: at, phone: aphone } = await onboardToUnderReview('RealApprove');
+  const before = await call('GET', '/partner/onboarding/status', { token: at });
+  const queue = await call('GET', '/admin/kitchen-accounts?status=UNDER_REVIEW', { headers: { 'x-admin-secret': ADMIN_SECRET } });
+  const account = queue.data?.find((a) => a.phone === aphone);
+  const approve = await call('POST', `/admin/kitchen-accounts/${account?.id}/approve`, { headers: { 'x-admin-secret': ADMIN_SECRET } });
+  const after = await call('GET', '/partner/onboarding/status', { token: at });
+  expect(
+    before.data?.status === 'UNDER_REVIEW' && !!account && approve.status === 201 && after.data?.status === 'ACTIVE',
+    `before=${before.data?.status} · found in UNDER_REVIEW queue=${!!account} · real approve → HTTP ${approve.status} · after=${after.data?.status}`,
+  );
+}
+
+step(66, 'Ops: the real admin reject endpoint sends a kitchen back to onboarding with the reason visible');
+{
+  const { token: rt, phone: rphone } = await onboardToUnderReview('RealReject');
+  const before = await call('GET', '/partner/onboarding/status', { token: rt });
+  const queue = await call('GET', '/admin/kitchen-accounts?status=UNDER_REVIEW', { headers: { 'x-admin-secret': ADMIN_SECRET } });
+  const account = queue.data?.find((a) => a.phone === rphone);
+  const reject = await call('POST', `/admin/kitchen-accounts/${account?.id}/reject`, {
+    body: { reason: 'Kitchen photos are too blurry to verify hygiene standards' },
+    headers: { 'x-admin-secret': ADMIN_SECRET },
+  });
+  const after = await call('GET', '/partner/onboarding/status', { token: rt });
+  expect(
+    // Rejection sends the kitchen back to ONBOARDING (not a terminal
+    // REJECTED state) so they can fix the issue and resubmit — the reason is
+    // what the partner app actually shows them, matching the controller's
+    // own doc comment ("sends them back to onboarding with your reason shown").
+    before.data?.status === 'UNDER_REVIEW' &&
+      !!account &&
+      reject.status === 201 &&
+      after.data?.status === 'ONBOARDING' &&
+      after.data?.rejectionReason === 'Kitchen photos are too blurry to verify hygiene standards',
+    `before=${before.data?.status} · found in queue=${!!account} · reject → HTTP ${reject.status} · after=${after.data?.status} · reason visible to partner="${after.data?.rejectionReason}"`,
+  );
+}
+
+// ── 67: the REAL FSSAI admin file→approve flow (not partner-side simulate) ──
+step(67, 'Ops: the real FSSAI admin file→approve flow (not the partner-side simulate/advance shortcut)');
+{
+  const phone = `+9198766${String(Date.now()).slice(-5)}`;
+  await call('POST', '/partner/auth/otp/send', { body: { phone }, token: null });
+  const verify = await call('POST', '/partner/auth/otp/verify', { body: { phone, otp: '123456' }, token: null });
+  const ft = verify.data.tokens.accessToken;
+  await call('POST', '/partner/onboarding/owner-details', { body: { ownerName: 'RealFssai Owner' }, token: ft });
+  await call('POST', '/partner/onboarding/kitchen-details', { body: { name: `RealFssai Kitchen ${Date.now()}`, kitchenType: 'HOME_KITCHEN' }, token: ft });
+
+  const start = await call('POST', '/partner/fssai-assistance/start', { token: ft });
+  const requestId = start.data?.request?.id;
+  for (const type of ['IDENTITY_PROOF', 'ADDRESS_PROOF', 'KITCHEN_PHOTO', 'PASSPORT_PHOTO']) {
+    await call('POST', '/partner/fssai-assistance/documents', { body: { type, fileUrl: `https://x/${type}.jpg` }, token: ft });
+  }
+  await call('POST', '/partner/fssai-assistance/confirm-payment', { token: ft });
+
+  const file = await call('POST', `/admin/fssai-assistance-requests/${requestId}/file`, { headers: { 'x-admin-secret': ADMIN_SECRET } });
+  const approve = await call('POST', `/admin/fssai-assistance-requests/${requestId}/approve`, {
+    body: { licenseNumber: '12423099REAL456', validFrom: '2026-10-01', validTill: '2027-10-01' },
+    headers: { 'x-admin-secret': ADMIN_SECRET },
+  });
+  const status = await call('GET', '/partner/fssai-assistance/status', { token: ft });
+  expect(
+    file.status === 201 &&
+      file.data?.request?.status === 'APPLICATION_FILED' &&
+      approve.status === 201 &&
+      approve.data?.request?.status === 'APPROVED' &&
+      status.data?.request?.licenseNumber === '12423099REAL456',
+    `file → ${file.data?.request?.status} · approve → ${approve.data?.request?.status} · partner sees licenseNumber="${status.data?.request?.licenseNumber}"`,
+  );
+}
+
+// ── 68: smaller read-path coverage gaps — wallet history, ads analytics, ──
+// suggestion single-fetch, all against already-established smoke-kitchen state
+step(68, 'Coverage: wallet transaction history, ads analytics batch, and single-suggestion fetch');
+{
+  const txns = await call('GET', '/partner/wallet/transactions?page=1&limit=10');
+  const analytics = await call('GET', `/partner/ads/campaigns/analytics?ids=${campaignId}`);
+  const anySuggestion = await call('GET', '/partner/ads/suggestions?page=1&limit=1');
+  const foundSuggestionId = anySuggestion.data?.items?.[0]?.id;
+  let suggestionSingle = { status: 0 };
+  if (foundSuggestionId) {
+    suggestionSingle = await call('GET', `/partner/ads/suggestions/${foundSuggestionId}`);
+  }
+  expect(
+    txns.status === 200 &&
+      Array.isArray(txns.data?.items) &&
+      analytics.status === 200 &&
+      Array.isArray(analytics.data) &&
+      analytics.data.some((c) => c.id === campaignId) &&
+      (foundSuggestionId ? suggestionSingle.status === 200 && suggestionSingle.data?.id === foundSuggestionId : true),
+    `wallet transactions=${txns.data?.items?.length} · analytics batch found our campaign=${analytics.data?.some((c) => c.id === campaignId)} · suggestion single-fetch → HTTP ${foundSuggestionId ? suggestionSingle.status : '(skipped, no suggestion generated this run — Gemini outage)'}`,
+  );
+}
+
+// ── 69: subscriptions — resume + skip-delivery (only pause/dispatch/reject ──
+// were exercised earlier)
+step(69, 'Coverage: subscription resume and skip-delivery');
+{
+  const custPhone = `+9198767${String(Date.now()).slice(-5)}`;
+  await call('POST', '/auth/otp/send', { body: { phone: custPhone }, token: null });
+  const cv = await call('POST', '/auth/otp/verify', { body: { phone: custPhone, otp: '123456' }, token: null });
+  const ct = cv.data.tokens.accessToken;
+  const form = new FormData();
+  form.append('fullName', 'Coverage Buyer');
+  await fetch(`${API}/customer/profile/complete`, { method: 'POST', headers: { Authorization: `Bearer ${ct}` }, body: form });
+
+  const istNow = new Date(Date.now() + 5.5 * 3600 * 1000);
+  const todayDow = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'][istNow.getUTCDay()];
+  const create = await call('POST', '/customer/subscriptions', {
+    body: { kitchenId, planName: 'Coverage Plan', foodType: 'VEG', mealsPerDay: 1, deliveryDays: [todayDow], deliveryTime: 'LUNCH', billingCycle: 'WEEKLY' },
+    token: ct,
+  });
+  const approve = await call('POST', `/partner/subscriptions/${create.data?.id}/approve`);
+  const pause = await call('POST', `/partner/subscriptions/${create.data?.id}/pause`);
+  const resume = await call('POST', `/partner/subscriptions/${create.data?.id}/resume`);
+  const todayStr = approve.data?.deliverySchedule?.[0]?.date?.slice(0, 10);
+  const skip = await call('POST', `/partner/subscriptions/${create.data?.id}/deliveries/${todayStr}/skip`, { body: { reason: 'Ingredient shortage' } });
+  expect(
+    resume.status === 200 && resume.data?.status === 'ACTIVE' && skip.status === 200 && skip.data?.status === 'SKIPPED',
+    `pause → ${pause.data?.status} · resume → ${resume.data?.status} · skip(${todayStr}) → ${skip.data?.status}`,
+  );
+}
+
+// ── 70: payouts — the admin "fail" path (only process/complete were tested) ──
+step(70, 'Coverage: a fresh order → payout request → admin fail (with a failure reason)');
+{
+  const custPhone = `+9198768${String(Date.now()).slice(-5)}`;
+  await call('POST', '/auth/otp/send', { body: { phone: custPhone }, token: null });
+  const cv = await call('POST', '/auth/otp/verify', { body: { phone: custPhone, otp: '123456' }, token: null });
+  const ct = cv.data.tokens.accessToken;
+  const form = new FormData();
+  form.append('fullName', 'Fail Coverage Buyer');
+  await fetch(`${API}/customer/profile/complete`, { method: 'POST', headers: { Authorization: `Bearer ${ct}` }, body: form });
+  await call('POST', '/customer/cart/items', { body: { mealId, quantity: 1 }, token: ct });
+  const addr = await call('POST', '/customer/addresses', { body: { label: 'HOME', line1: 'Fail Coverage Addr', locality: 'Malviya Nagar', pincode: '302017' }, token: ct });
+  const order = await call('POST', '/customer/orders', { body: { addressId: addr.data.id, paymentMethod: 'COD' }, token: ct });
+  await call('POST', `/partner/orders/${order.data?.id}/status`, { body: { status: 'ACCEPTED' } });
+  await call('POST', `/partner/orders/${order.data?.id}/status`, { body: { status: 'PREPARING' } });
+  await call('POST', `/partner/orders/${order.data?.id}/status`, { body: { status: 'OUT_FOR_DELIVERY' } });
+  await call('POST', `/customer/orders/${order.data?.id}/simulate/DELIVERED`, { token: ct });
+
+  const req = await call('POST', '/partner/payouts/request');
+  const payoutId = req.data?.id;
+  const fail = await call('POST', `/admin/payouts/${payoutId}/fail`, { body: { reason: 'Bank rejected the transfer — IFSC no longer valid' }, headers: { 'x-admin-secret': ADMIN_SECRET } });
+  expect(
+    fail.status === 201 && fail.data?.status === 'FAILED' && fail.data?.failureReason === 'Bank rejected the transfer — IFSC no longer valid',
+    `payout request → HTTP ${req.status} · admin fail → HTTP ${fail.status}, status=${fail.data?.status}, reason="${fail.data?.failureReason}"`,
+  );
+}
+
+// ── 71–73: partner CRUD completeness for reels/stories/menu (only create+list ──
+// were previously exercised for these three)
+step(71, 'Coverage: reel CRUD completeness — list mine, edit caption, delete');
+{
+  const list = await call('GET', '/partner/reels');
+  const found = list.data?.some((r) => r.id === reelId);
+  const patch = await call('PATCH', `/partner/reels/${reelId}`, { body: { caption: 'Updated caption for coverage' } });
+  const del = await call('DELETE', `/partner/reels/${reelId}`);
+  expect(
+    list.status === 200 && found && patch.status === 200 && patch.data?.caption === 'Updated caption for coverage' && del.status === 200,
+    `list mine finds it=${found} · patch caption → "${patch.data?.caption}" · delete → HTTP ${del.status}`,
+  );
+}
+
+step(72, 'Coverage: story CRUD completeness — list mine, edit caption, delete');
+{
+  const publish = await call('POST', '/partner/stories', { body: { mediaType: 'VIDEO', mediaUrl: 'https://cdn.freshbhoj.com/stories/coverage.mp4', caption: 'Coverage story' } });
+  const storyId = publish.data?.id;
+  const list = await call('GET', '/partner/stories');
+  const found = list.data?.some((s) => s.id === storyId);
+  const patch = await call('PATCH', `/partner/stories/${storyId}`, { body: { caption: 'Updated story caption' } });
+  const del = await call('DELETE', `/partner/stories/${storyId}`);
+  expect(
+    publish.status === 201 && list.status === 200 && found && patch.status === 200 && patch.data?.caption === 'Updated story caption' && del.status === 200,
+    `publish → HTTP ${publish.status} · list mine finds it=${found} · patch caption → "${patch.data?.caption}" · delete → HTTP ${del.status}`,
+  );
+}
+
+step(73, 'Coverage: menu CRUD completeness — detail fetch, edit, toggle availability, delete');
+{
+  const create = await call('POST', '/partner/menu', { body: { name: 'Coverage Dish', images: ['https://x/coverage.jpg'], price: 150, foodType: 'VEG', calories: 300, proteinG: 15, isAvailable: true } });
+  const dishId = create.data?.id;
+  const detail = await call('GET', `/partner/menu/${dishId}`);
+  const patch = await call('PATCH', `/partner/menu/${dishId}`, { body: { price: 175 } });
+  const availability = await call('PATCH', `/partner/menu/${dishId}/availability`, { body: { isAvailable: false } });
+  const del = await call('DELETE', `/partner/menu/${dishId}`);
+  expect(
+    create.status === 201 &&
+      detail.status === 200 &&
+      detail.data?.id === dishId &&
+      patch.status === 200 &&
+      patch.data?.price === 175 &&
+      availability.status === 200 &&
+      availability.data?.isAvailable === false &&
+      del.status === 200,
+    `detail fetch → HTTP ${detail.status} · patch price → ₹${patch.data?.price} · availability → ${availability.data?.isAvailable} · delete → HTTP ${del.status}`,
+  );
+}
+
 console.log(`\n${failures === 0 ? '\x1b[32mALL CHECKS PASSED\x1b[0m' : `\x1b[31m${failures} CHECK(S) FAILED\x1b[0m`}`);
 process.exit(failures === 0 ? 0 : 1);

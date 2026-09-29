@@ -1,7 +1,6 @@
 import { BadRequestException, ConflictException, Injectable, Logger } from '@nestjs/common';
 import {
   FssaiAssistanceStatus,
-  KitchenAccount,
   KitchenAccountStatus,
   KitchenDocumentType,
   KitchenOnboardingStep,

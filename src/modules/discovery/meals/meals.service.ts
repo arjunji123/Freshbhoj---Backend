@@ -82,7 +82,12 @@ export class MealsService {
       this.prisma.meal.findMany({
         where,
         select: { ...MEAL_CARD_SELECT, kitchen: { select: NEARBY_KITCHEN_SELECT } },
-        orderBy: [{ orderCount: 'desc' }, { rating: 'desc' }, { ratingCount: 'desc' }],
+        // A deterministic final tiebreak matters here: every fresh dish
+        // starts at orderCount/rating/ratingCount = 0, so without one,
+        // Postgres's tie order is unspecified and a genuinely-in-radius dish
+        // can be arbitrarily dropped by the `take` over-fetch below once
+        // enough zero-engagement dishes exist in the same bounding box.
+        orderBy: [{ orderCount: 'desc' }, { rating: 'desc' }, { ratingCount: 'desc' }, { createdAt: 'desc' }],
         // Over-fetch: the box is wider than the circle, so some rows are
         // dropped by the exact distance check below.
         take: (page + 2) * limit,
