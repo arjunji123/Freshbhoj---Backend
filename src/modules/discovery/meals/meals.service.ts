@@ -89,8 +89,15 @@ export class MealsService {
         // enough zero-engagement dishes exist in the same bounding box.
         orderBy: [{ orderCount: 'desc' }, { rating: 'desc' }, { ratingCount: 'desc' }, { createdAt: 'desc' }],
         // Over-fetch: the box is wider than the circle, so some rows are
-        // dropped by the exact distance check below.
-        take: (page + 2) * limit,
+        // dropped by the exact distance check below. The deterministic
+        // tiebreak above guarantees a genuinely-in-radius dish is never
+        // *arbitrarily* excluded, but a small `take` can still legitimately
+        // truncate it once a bounding box has many candidates (confirmed via
+        // this exact scenario — a shared dev DB accumulating 100+ test dishes
+        // in one small radius from repeated smoke-test runs). A flat floor
+        // keeps this robust without an unbounded scan on a real, sparser
+        // production dataset.
+        take: Math.max((page + 2) * limit, 200),
       }),
       this.getFavouriteIds(userId),
     ]);
