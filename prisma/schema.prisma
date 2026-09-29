@@ -398,10 +398,13 @@ model Kitchen {
   orders    Order[]
   followers KitchenFollow[]
 
-  operatingHours   KitchenOperatingHours[]
-  holidayOverrides KitchenHolidayOverride[]
-  reelCampaigns    ReelCampaign[]
-  subscriptions    Subscription[]
+  operatingHours      KitchenOperatingHours[]
+  holidayOverrides    KitchenHolidayOverride[]
+  reelCampaigns       ReelCampaign[]
+  subscriptions       Subscription[]
+  wallet              KitchenWallet?
+  premiumSubscription KitchenPremiumSubscription?
+  campaignSuggestions CampaignSuggestion[]
 
   @@index([status, city])
   @@index([isVerified])
@@ -994,7 +997,12 @@ model ReelCampaign {
   reelId        String
   reel          Reel               @relation(fields: [reelId], references: [id], onDelete: Cascade)
   dailyBudgetRs Int
-  /// Null = runs indefinitely until the partner stops it.
+  /// Mandatory for every campaign created from Round 5 on — endDate is
+  /// server-computed from this (today + durationDays - 1) at creation, no
+  /// longer client-supplied. Nullable in the DB only so pre-Round-5 rows
+  /// (created before this field existed) don't need a migration backfill.
+  durationDays  Int?
+  /// Null = a pre-Round-5 indefinite campaign (legacy). Every new campaign gets one.
   endDate       DateTime?          @db.Date
   status        ReelCampaignStatus @default(ACTIVE)
 
@@ -1009,7 +1017,8 @@ model ReelCampaign {
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
 
-  dailyStats ReelCampaignDailyStat[]
+  dailyStats         ReelCampaignDailyStat[]
+  CampaignSuggestion CampaignSuggestion[]
 
   @@index([kitchenId, status])
   @@index([reelId, status])
@@ -1029,6 +1038,110 @@ model ReelCampaignDailyStat {
 
   @@unique([campaignId, date])
   @@map("reel_campaign_daily_stats")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WALLET — single unified ledger backing ad-boost charges and premium-plan
+// charges (and, later, anything else that costs the kitchen money). No
+// payment gateway is wired — top-up completes synchronously as PAID, same
+// placeholder philosophy as FssaiAssistanceRequest.paymentStatus/Payout.
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum WalletTransactionType {
+  CREDIT
+  DEBIT
+}
+
+enum WalletTransactionReason {
+  TOPUP
+  AD_BOOST
+  PREMIUM_PLAN
+}
+
+model KitchenWallet {
+  id        String   @id @default(uuid())
+  kitchenId String   @unique
+  kitchen   Kitchen  @relation(fields: [kitchenId], references: [id], onDelete: Cascade)
+  balanceRs Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  transactions WalletTransaction[]
+
+  @@map("kitchen_wallets")
+}
+
+/// CREDIT (TOPUP) and DEBIT (AD_BOOST, PREMIUM_PLAN) share one table so
+/// "Recent Transactions" is a single chronological read, not a merge across
+/// feature tables the way Payouts' transaction list is.
+model WalletTransaction {
+  id          String                  @id @default(uuid())
+  walletId    String
+  wallet      KitchenWallet           @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  type        WalletTransactionType
+  reason      WalletTransactionReason
+  amountRs    Int
+  description String
+  /// The campaign/subscription this charge is for, when applicable — no
+  /// enforced FK, so the referenced row can later be deleted without
+  /// orphaning ledger history.
+  referenceId String?
+  createdAt   DateTime                @default(now())
+
+  @@index([walletId, createdAt])
+  @@map("wallet_transactions")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AI OPTIMIZATION SUGGESTIONS — one-shot Gemini structured-output calls over
+// a kitchen's real campaign performance, capped to one batch/kitchen/day (no
+// rate-limit/cache infra exists in this codebase — this batchDate check IS
+// the rate limit).
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum SuggestionType {
+  /// Mechanical apply: bumps the target campaign's dailyBudgetRs, charges the wallet the delta.
+  BUDGET_INCREASE
+  /// Mechanical apply: adjusts Kitchen.serviceRadiusKm (clamped 1-40km), free.
+  DELIVERY_RADIUS
+  /// Acknowledge-only — changing a kitchen's public cuisine identity is too high-stakes for a one-tap AI apply.
+  TARGET_CUISINE
+  /// Acknowledge-only — no in-app video/creative editing exists to act on this automatically.
+  CREATIVE_REFRESH
+}
+
+enum SuggestionStatus {
+  NEW
+  APPLIED
+  DISMISSED
+}
+
+model CampaignSuggestion {
+  id             String           @id @default(uuid())
+  kitchenId      String
+  kitchen        Kitchen          @relation(fields: [kitchenId], references: [id], onDelete: Cascade)
+  /// Null for kitchen-wide suggestions (DELIVERY_RADIUS, TARGET_CUISINE) — set for campaign-scoped ones.
+  campaignId     String?
+  campaign       ReelCampaign?    @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  type           SuggestionType
+  title          String
+  description    String
+  /// {reachDeltaPct?, ordersDeltaPct?, roiDeltaPct?, expectedOrders?, costRs, effort} — AI-authored, shape kept loose on purpose.
+  impact         Json
+  /// The AI's own explanation for why it suggested this — shown verbatim as "AI Reasoning".
+  reasoning      String
+  status         SuggestionStatus @default(NEW)
+  /// {field, before, after} once applied — null until then.
+  appliedChanges Json?
+  /// IST calendar date this batch was generated on — caps Gemini calls to once/kitchen/day.
+  batchDate      DateTime         @db.Date
+  appliedAt      DateTime?
+  dismissedAt    DateTime?
+  createdAt      DateTime         @default(now())
+
+  @@index([kitchenId, status])
+  @@index([kitchenId, batchDate])
+  @@map("campaign_suggestions")
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1524,6 +1637,41 @@ model SubscriptionBillingEvent {
 
   @@unique([subscriptionId, cycleStart])
   @@map("subscription_billing_events")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PREMIUM PLANS — FreshBhoj selling a tier TO a kitchen. Deliberately
+// distinct naming from Subscription/SubscriptionStatus (a customer's
+// recurring meal plan with a kitchen) to avoid the collision. Renewal is
+// lazy/computed-on-read on GET /partner/premium/subscription, same idiom as
+// ReelCampaign settlement and Subscription billing backfill — no cron exists.
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum PremiumTier {
+  BASIC
+  PRO
+  ELITE
+}
+
+enum PremiumSubscriptionStatus {
+  ACTIVE
+  EXPIRED
+}
+
+model KitchenPremiumSubscription {
+  id               String                    @id @default(uuid())
+  kitchenId        String                    @unique
+  kitchen          Kitchen                   @relation(fields: [kitchenId], references: [id], onDelete: Cascade)
+  tier             PremiumTier
+  status           PremiumSubscriptionStatus @default(ACTIVE)
+  /// Frozen at purchase/renewal — a later price-list change doesn't affect an already-paid period.
+  priceRs          Int
+  currentPeriodEnd DateTime                  @db.Date
+  autoRenew        Boolean                   @default(true)
+  createdAt        DateTime                  @default(now())
+  updatedAt        DateTime                  @updatedAt
+
+  @@map("kitchen_premium_subscriptions")
 }
 
 // ═════════════════════════════════════════════════════════════════════════════

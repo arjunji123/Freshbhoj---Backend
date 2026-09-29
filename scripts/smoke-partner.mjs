@@ -921,21 +921,29 @@ step(55, 'Order chat: customer reads (marks kitchen messages read) and replies, 
   );
 }
 
-// ── 56–57: Reel Ads / Campaigns — self-serve budget-based promotion ─────────
-step(56, 'Ads: create a campaign on the already-published smoke-test reel — day-0 spend is one full daily budget');
+// ── 56–57: Reel Ads / Campaigns — wallet-funded, duration-bound boosts ──────
+step(56, 'Wallet + Ads: top up, then boost a reel for a fixed duration — day-0 spend is one full daily budget, wallet is debited upfront');
 var campaignId;
 {
+  const topup = await call('POST', '/partner/wallet/topup', { body: { amountRs: 5000 } });
+  expect(topup.status === 200 && topup.data?.wallet?.balanceRs === 5000, `top up ₹5000 → balanceRs=${topup.data?.wallet?.balanceRs}`);
+
   const estimate = await call('GET', '/partner/ads/campaigns/estimate?dailyBudgetRs=200');
-  const create = await call('POST', '/partner/ads/campaigns', { body: { reelId, dailyBudgetRs: 200 } });
+  const missingDuration = await call('POST', '/partner/ads/campaigns', { body: { reelId, dailyBudgetRs: 200 } });
+  const create = await call('POST', '/partner/ads/campaigns', { body: { reelId, dailyBudgetRs: 200, durationDays: 5 } });
   campaignId = create.data?.id;
-  const dup = await call('POST', '/partner/ads/campaigns', { body: { reelId, dailyBudgetRs: 100 } });
+  const dup = await call('POST', '/partner/ads/campaigns', { body: { reelId, dailyBudgetRs: 100, durationDays: 5 } });
+  const walletAfter = await call('GET', '/partner/wallet');
   expect(
     estimate.status === 200 &&
       estimate.data?.min > 0 &&
+      missingDuration.status === 400 &&
       create.status === 201 &&
       create.data?.spendRs === 200 &&
-      dup.status === 400,
-    `estimate=[${estimate.data?.min},${estimate.data?.max}] · day-0 spendRs=${create.data?.spendRs} · duplicate-active-campaign guard → HTTP ${dup.status}`,
+      create.data?.durationDays === 5 &&
+      dup.status === 400 &&
+      walletAfter.data?.balanceRs === 5000 - 200 * 5,
+    `estimate=[${estimate.data?.min},${estimate.data?.max}] · missing durationDays → HTTP ${missingDuration.status} · day-0 spendRs=${create.data?.spendRs} · duplicate guard → HTTP ${dup.status} · wallet after=${walletAfter.data?.balanceRs} (expected ${5000 - 1000})`,
   );
 }
 
@@ -1021,6 +1029,128 @@ step(59, "Subscriptions: dispatch today's delivery, pause/cancel, and reject a s
       reject.data?.status === 'REJECTED' &&
       reject.data?.rejectionReason === 'Outside delivery radius',
     `dispatch(${todayStr}) → ${dispatch.data?.status} · re-dispatch → HTTP ${redispatch.status} · pause → ${pause.data?.status} · cancel → ${cancel.data?.status} · reject → ${reject.data?.status}`,
+  );
+}
+
+// ── 60: Wallet — an oversized boost is rejected and the wallet is untouched ─
+step(60, 'Wallet: an oversized boost is rejected 400 and the wallet balance is unchanged (the $transaction rolls back)');
+{
+  const reel2 = await call('POST', '/partner/reels', { body: { videoUrl: 'https://cdn.freshbhoj.com/reels/smoke-oversized.mp4', caption: 'Oversized boost test' } });
+  const before = await call('GET', '/partner/wallet');
+  const oversized = await call('POST', '/partner/ads/campaigns', { body: { reelId: reel2.data?.id, dailyBudgetRs: 10000, durationDays: 30 } });
+  const after = await call('GET', '/partner/wallet');
+  expect(
+    oversized.status === 400 && after.data?.balanceRs === before.data?.balanceRs,
+    `oversized boost (cost ≫ balance) → HTTP ${oversized.status} · wallet unchanged: ${before.data?.balanceRs} → ${after.data?.balanceRs}`,
+  );
+}
+
+// ── 61–62: AI Optimization Suggestions — one-shot Gemini, once/kitchen/day ──
+step(61, 'Suggestions: generate succeeds against the smoke kitchen’s active campaign, and is capped to once/kitchen/day');
+{
+  // The negative path (generate rejected with zero active campaigns) needs a
+  // fresh, campaign-less kitchen and is exercised by scratchpad/verify-round5.mjs
+  // instead, to keep this shared script's happy-path walk fast.
+  // The campaign from step 56 was stopped (ENDED) in step 57, so this needs
+  // its own fresh ACTIVE campaign to have anything to generate suggestions from.
+  const suggestionReel = await call('POST', '/partner/reels', { body: { videoUrl: 'https://cdn.freshbhoj.com/reels/smoke-suggestions.mp4', caption: 'Suggestions test reel' } });
+  const suggestionCampaign = await call('POST', '/partner/ads/campaigns', { body: { reelId: suggestionReel.data?.id, dailyBudgetRs: 100, durationDays: 3 } });
+  campaignId = suggestionCampaign.data?.id;
+
+  const gen1 = await call('POST', '/partner/ads/suggestions/generate');
+  if (gen1.status === 503) {
+    bad(`Gemini is currently unavailable (HTTP 503) — this is an external outage, not a backend bug; re-run this script once Gemini recovers to exercise this step for real`);
+  } else {
+    const hasReasoning = Array.isArray(gen1.data) && gen1.data.every((s) => typeof s.reasoning === 'string' && s.reasoning.length > 0);
+    expect(gen1.status === 200 && hasReasoning, `generate → HTTP ${gen1.status}, ${gen1.data?.length ?? 0} suggestion(s), all reasoned=${hasReasoning}`);
+
+    const gen2 = await call('POST', '/partner/ads/suggestions/generate');
+    const sameBatch = gen1.data?.length && gen2.data?.length && gen1.data[0].id === gen2.data[0].id;
+    expect(gen2.status === 200 && sameBatch, `same-day re-generate returns the identical batch (first id ${gen1.data?.[0]?.id} === ${gen2.data?.[0]?.id})`);
+  }
+}
+
+step(62, 'Suggestions: dismiss flips status and cannot run twice; applying (if a BUDGET_INCREASE was generated) really moves the campaign budget');
+{
+  const list = await call('GET', '/partner/ads/suggestions?status=NEW');
+  if (!list.data?.items?.length) {
+    ok('no NEW suggestions available this run (Gemini outage or none generated) — skipped without failing');
+  } else {
+    const toDismiss = list.data.items[list.data.items.length - 1];
+    const dismiss = await call('POST', `/partner/ads/suggestions/${toDismiss.id}/dismiss`);
+    expect(dismiss.status === 200 && dismiss.data?.status === 'DISMISSED', `dismiss → status=${dismiss.data?.status}`);
+    const redismiss = await call('POST', `/partner/ads/suggestions/${toDismiss.id}/dismiss`);
+    expect(redismiss.status === 400, `re-dismissing an already-DISMISSED suggestion → HTTP ${redismiss.status}`);
+
+    const budgetSuggestion = list.data.items.find((s) => s.type === 'BUDGET_INCREASE' && s.campaignId === campaignId);
+    if (budgetSuggestion) {
+      const before = await call('GET', `/partner/ads/campaigns/${campaignId}`);
+      const apply = await call('POST', `/partner/ads/suggestions/${budgetSuggestion.id}/apply`);
+      const after = await call('GET', `/partner/ads/campaigns/${campaignId}`);
+      expect(
+        apply.status === 200 && apply.data?.status === 'APPLIED' && after.data?.dailyBudgetRs > before.data?.dailyBudgetRs,
+        `apply BUDGET_INCREASE → dailyBudgetRs ${before.data?.dailyBudgetRs} → ${after.data?.dailyBudgetRs}`,
+      );
+    } else {
+      ok('no BUDGET_INCREASE suggestion on our campaign this run — real AI output varies, not asserted every run');
+    }
+  }
+}
+
+// ── 63–64: Kitchen Premium Plans — Basic reel cap vs. backward compatibility ─
+step(63, 'Premium: tier catalog, purchasing Basic charges the wallet and caps reels at 2/period');
+{
+  const tiers = await call('GET', '/partner/premium/tiers');
+  const pro = tiers.data?.find((t) => t.tier === 'PRO');
+  expect(tiers.status === 200 && tiers.data?.length === 3 && pro?.isMostPopular === true, `3 tiers, PRO isMostPopular=${pro?.isMostPopular}`);
+
+  // A dedicated, freshly-onboarded kitchen — the shared smoke kitchen has
+  // already published several reels in earlier steps, which would trip the
+  // 2/period cap before this step's own assertions even start.
+  const basicPhone = `+9198764${String(Date.now()).slice(-5)}`;
+  await call('POST', '/partner/auth/otp/send', { body: { phone: basicPhone }, token: null });
+  const bv = await call('POST', '/partner/auth/otp/verify', { body: { phone: basicPhone, otp: '123456' }, token: null });
+  const bt = bv.data.tokens.accessToken;
+  await call('POST', '/partner/onboarding/owner-details', { body: { ownerName: 'Basic Owner' }, token: bt });
+  await call('POST', '/partner/onboarding/kitchen-details', { body: { name: `Basic Kitchen ${Date.now()}`, kitchenType: 'HOME_KITCHEN' }, token: bt });
+  await call('POST', '/partner/wallet/topup', { body: { amountRs: 1000 }, token: bt });
+
+  const purchase = await call('POST', '/partner/premium/purchase', { body: { tier: 'BASIC' }, token: bt });
+  expect(purchase.status === 201 && purchase.data?.tier === 'BASIC' && purchase.data?.status === 'ACTIVE', `purchase Basic → tier=${purchase.data?.tier}, status=${purchase.data?.status}`);
+
+  const r1 = await call('POST', '/partner/reels', { body: { videoUrl: 'https://cdn.freshbhoj.com/reels/smoke-basic-1.mp4', caption: 'Basic reel 1' }, token: bt });
+  const r2 = await call('POST', '/partner/reels', { body: { videoUrl: 'https://cdn.freshbhoj.com/reels/smoke-basic-2.mp4', caption: 'Basic reel 2' }, token: bt });
+  const r3 = await call('POST', '/partner/reels', { body: { videoUrl: 'https://cdn.freshbhoj.com/reels/smoke-basic-3.mp4', caption: 'Basic reel 3' }, token: bt });
+  expect(
+    r1.status === 201 && r2.status === 201 && r3.status === 400,
+    `reels 1–2 (within the Basic cap) → HTTP ${r1.status}, ${r2.status} · 3rd rejected → HTTP ${r3.status} · "${r3.json?.message}"`,
+  );
+}
+
+step(64, 'Premium: a kitchen with no premium row stays fully unrestricted (backward compatibility), Pro has no reel cap, insufficient balance blocks purchase');
+{
+  const noPremiumPhone = `+9198762${String(Date.now()).slice(-5)}`;
+  await call('POST', '/partner/auth/otp/send', { body: { phone: noPremiumPhone }, token: null });
+  const v1 = await call('POST', '/partner/auth/otp/verify', { body: { phone: noPremiumPhone, otp: '123456' }, token: null });
+  const t1 = v1.data.tokens.accessToken;
+  await call('POST', '/partner/onboarding/owner-details', { body: { ownerName: 'NoPremium Owner' }, token: t1 });
+  await call('POST', '/partner/onboarding/kitchen-details', { body: { name: `NoPremium Kitchen ${Date.now()}`, kitchenType: 'HOME_KITCHEN' }, token: t1 });
+  await call('POST', '/partner/reels', { body: { videoUrl: 'https://cdn.freshbhoj.com/reels/smoke-nopremium-0.mp4', caption: 'No-premium reel 1' }, token: t1 });
+  await call('POST', '/partner/reels', { body: { videoUrl: 'https://cdn.freshbhoj.com/reels/smoke-nopremium-1.mp4', caption: 'No-premium reel 2' }, token: t1 });
+  const noPremiumReel = await call('POST', '/partner/reels', { body: { videoUrl: 'https://cdn.freshbhoj.com/reels/smoke-nopremium-2.mp4', caption: 'No-premium reel 3' }, token: t1 });
+  expect(noPremiumReel.status === 201, `3rd reel for a kitchen with zero premium rows still succeeds (unrestricted) → HTTP ${noPremiumReel.status}`);
+
+  const poorPhone = `+9198763${String(Date.now()).slice(-5)}`;
+  await call('POST', '/partner/auth/otp/send', { body: { phone: poorPhone }, token: null });
+  const v2 = await call('POST', '/partner/auth/otp/verify', { body: { phone: poorPhone, otp: '123456' }, token: null });
+  const t2 = v2.data.tokens.accessToken;
+  await call('POST', '/partner/onboarding/owner-details', { body: { ownerName: 'Poor Owner' }, token: t2 });
+  await call('POST', '/partner/onboarding/kitchen-details', { body: { name: `Poor Kitchen ${Date.now()}`, kitchenType: 'HOME_KITCHEN' }, token: t2 });
+  const purchase = await call('POST', '/partner/premium/purchase', { body: { tier: 'ELITE' }, token: t2 });
+  const mySub = await call('GET', '/partner/premium/subscription', { token: t2 });
+  expect(
+    purchase.status === 400 && mySub.data?.status === 'NONE',
+    `purchase Elite with ₹0 wallet → HTTP ${purchase.status} · subscription status after=${mySub.data?.status}`,
   );
 }
 

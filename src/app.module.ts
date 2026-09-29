@@ -51,6 +51,9 @@ import { OperatingHoursModule } from './modules/kitchen/portal/operating-hours/o
 import { KitchenAdsModule } from './modules/kitchen/portal/ads/kitchen-ads.module';
 import { KitchenSubscriptionsModule } from './modules/kitchen/portal/subscriptions/kitchen-subscriptions.module';
 import { OrderChatModule } from './modules/kitchen/portal/order-chat/order-chat.module';
+import { WalletModule } from './modules/kitchen/portal/wallet/wallet.module';
+import { AdsSuggestionsModule } from './modules/kitchen/portal/ads-suggestions/ads-suggestions.module';
+import { PremiumModule } from './modules/kitchen/portal/premium/premium.module';
 
 // ── Platform ────────────────────────────────────────────────────────────────
 import { CouponsModule } from './modules/platform/coupons/coupons.module';
@@ -122,6 +125,9 @@ import geminiConfig from './config/gemini.config';
     KitchenAdsModule,
     KitchenSubscriptionsModule,
     OrderChatModule,
+    WalletModule,
+    AdsSuggestionsModule,
+    PremiumModule,
   ],
   controllers: [AppController],
   providers: [

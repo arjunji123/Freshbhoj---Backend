@@ -48,6 +48,9 @@ export class CampaignDto {
   @ApiProperty({ example: 200 })
   dailyBudgetRs: number;
 
+  @ApiPropertyOptional({ nullable: true, example: 7, description: 'Null only for a pre-Round-5 legacy indefinite campaign' })
+  durationDays: number | null;
+
   @ApiPropertyOptional({ nullable: true })
   endDate: Date | null;
 

@@ -1,7 +1,8 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { ReelCampaign, ReelCampaignStatus, ReelStatus } from '@prisma/client';
+import { ReelCampaign, ReelCampaignStatus, ReelStatus, WalletTransactionReason } from '@prisma/client';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import { getIstCalendarDate } from '../../../../common/utils/kitchen';
+import { WalletService } from '../wallet/wallet.service';
 import { CreateCampaignDto } from './dto/kitchen-ads.dto';
 
 const DAY_MS = 86_400_000;
@@ -25,7 +26,10 @@ const REACH_PER_IMPRESSION = 0.75;
  */
 @Injectable()
 export class KitchenAdsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly walletService: WalletService,
+  ) {}
 
   async create(accountId: string, dto: CreateCampaignDto) {
     const kitchen = await this.requireKitchen(accountId);
@@ -48,16 +52,68 @@ export class KitchenAdsService {
     }
 
     const today = getIstCalendarDate();
-    const campaign = await this.prisma.reelCampaign.create({
-      data: {
-        kitchenId: kitchen.id,
-        reelId: dto.reelId,
-        dailyBudgetRs: dto.dailyBudgetRs,
-        endDate: dto.endDate ? new Date(dto.endDate) : null,
-        accrualAnchor: today,
-      },
+    const endDate = new Date(today.getTime() + (dto.durationDays - 1) * DAY_MS);
+    const totalCostRs = dto.dailyBudgetRs * dto.durationDays;
+
+    // The campaign is created first, inside the transaction, so the wallet
+    // debit's `referenceId` points at a real campaign id — if the debit
+    // throws (insufficient balance), the whole transaction rolls back and no
+    // orphaned campaign is left behind.
+    const campaign = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.reelCampaign.create({
+        data: {
+          kitchenId: kitchen.id,
+          reelId: dto.reelId,
+          dailyBudgetRs: dto.dailyBudgetRs,
+          durationDays: dto.durationDays,
+          endDate,
+          accrualAnchor: today,
+        },
+      });
+      await this.walletService.debit(kitchen.id, totalCostRs, WalletTransactionReason.AD_BOOST, {
+        referenceId: created.id,
+        description: `Boost — ₹${dto.dailyBudgetRs}/day × ${dto.durationDays} day(s)`,
+        tx,
+      });
+      return created;
     });
+
     return this.toDto(campaign, { includeDailyStats: false });
+  }
+
+  /**
+   * Used only by the AI Suggestions "Apply" flow (no controller route of its
+   * own) — bumps a campaign's daily budget and charges the wallet the
+   * delta for however many days are left, following the same "campaign is
+   * billed per whole day" idiom the rest of this service uses.
+   */
+  async updateBudget(kitchenId: string, campaignId: string, newDailyBudgetRs: number) {
+    const campaign = await this.requireOwned(kitchenId, campaignId);
+    if (campaign.status !== ReelCampaignStatus.ACTIVE) {
+      throw new BadRequestException(`Cannot change the budget of a campaign that is ${campaign.status}`);
+    }
+    if (newDailyBudgetRs <= campaign.dailyBudgetRs) {
+      throw new BadRequestException('New budget must be higher than the current budget');
+    }
+    const settled = await this.settleIfNeeded(campaign);
+    const today = getIstCalendarDate();
+    const remainingDays = settled.endDate
+      ? Math.round((settled.endDate.getTime() - today.getTime()) / DAY_MS) + 1
+      : 1; // defensive fallback — every post-Round-5 campaign has an endDate
+    if (remainingDays <= 0) {
+      throw new BadRequestException('This campaign has no days left to increase the budget for');
+    }
+    const deltaRs = (newDailyBudgetRs - settled.dailyBudgetRs) * remainingDays;
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      await this.walletService.debit(kitchenId, deltaRs, WalletTransactionReason.AD_BOOST, {
+        referenceId: campaignId,
+        description: `Budget increase (AI suggestion) — +₹${newDailyBudgetRs - settled.dailyBudgetRs}/day × ${remainingDays} day(s) left`,
+        tx,
+      });
+      return tx.reelCampaign.update({ where: { id: campaignId }, data: { dailyBudgetRs: newDailyBudgetRs } });
+    });
+    return this.toDto(updated, { includeDailyStats: false });
   }
 
   async list(accountId: string, status?: ReelCampaignStatus) {
@@ -230,6 +286,7 @@ export class KitchenAdsService {
       reelId: campaign.reelId,
       reel: reel ?? null,
       dailyBudgetRs: campaign.dailyBudgetRs,
+      durationDays: campaign.durationDays,
       endDate: campaign.endDate,
       status: campaign.status,
       spendRs,

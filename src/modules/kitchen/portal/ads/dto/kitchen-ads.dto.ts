@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsDateString, IsIn, IsInt, IsOptional, IsPositive, IsUUID } from 'class-validator';
+import { IsIn, IsInt, IsOptional, IsPositive, IsUUID } from 'class-validator';
 import { ReelCampaignStatus } from '@prisma/client';
 
 const STATUS_VALUES = Object.values(ReelCampaignStatus);
@@ -16,10 +16,14 @@ export class CreateCampaignDto {
   @IsPositive()
   dailyBudgetRs: number;
 
-  @ApiPropertyOptional({ example: '2026-10-15', description: 'Omit for an indefinite campaign' })
-  @IsOptional()
-  @IsDateString()
-  endDate?: string;
+  @ApiProperty({
+    example: 7,
+    description: 'How many days the boost runs — dailyBudgetRs × durationDays is charged from the wallet upfront, on creation',
+  })
+  @Type(() => Number)
+  @IsInt()
+  @IsPositive()
+  durationDays: number;
 }
 
 export class ListCampaignsQueryDto {

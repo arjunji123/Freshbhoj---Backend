@@ -1,6 +1,7 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { ReelStatus } from '@prisma/client';
 import { PrismaService } from '../../../../prisma/prisma.service';
+import { PremiumService } from '../premium/premium.service';
 import { PublishReelDto, UpdateReelDto } from './dto/kitchen-reels.dto';
 
 /**
@@ -13,7 +14,10 @@ import { PublishReelDto, UpdateReelDto } from './dto/kitchen-reels.dto';
  */
 @Injectable()
 export class KitchenReelsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly premiumService: PremiumService,
+  ) {}
 
   async list(accountId: string) {
     const kitchen = await this.requireKitchen(accountId);
@@ -37,6 +41,7 @@ export class KitchenReelsService {
 
   async publish(accountId: string, dto: PublishReelDto) {
     const kitchen = await this.requireKitchen(accountId);
+    await this.premiumService.checkReelPublishAllowed(kitchen.id);
 
     if (dto.mealId) {
       const meal = await this.prisma.meal.findUnique({
