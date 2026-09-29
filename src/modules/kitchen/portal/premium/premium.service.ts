@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { PremiumSubscriptionStatus, PremiumTier, WalletTransactionReason } from '@prisma/client';
 import { PrismaService } from '../../../../prisma/prisma.service';
-import { getIstCalendarDate } from '../../../../common/utils/kitchen';
+import { getIstCalendarDate, istMidnightUtcOf } from '../../../../common/utils/kitchen';
 import { WalletService } from '../wallet/wallet.service';
 import { PurchasePremiumDto } from './dto/premium.dto';
 
@@ -139,7 +139,11 @@ export class PremiumService {
     });
     if (!sub || sub.tier !== PremiumTier.BASIC || sub.status !== PremiumSubscriptionStatus.ACTIVE) return;
 
-    const periodStart = new Date(sub.currentPeriodEnd.getTime() - (PREMIUM_CYCLE_DAYS - 1) * DAY_MS);
+    const periodStartCalendar = new Date(sub.currentPeriodEnd.getTime() - (PREMIUM_CYCLE_DAYS - 1) * DAY_MS);
+    // `createdAt` is a real-time `DateTime`, not `@db.Date` — the calendar
+    // value must be converted to genuine IST midnight before comparing
+    // against it (see `istMidnightUtcOf`'s doc comment).
+    const periodStart = istMidnightUtcOf(periodStartCalendar);
     const publishedThisPeriod = await this.prisma.reel.count({
       where: { kitchenId, status: 'PUBLISHED', createdAt: { gte: periodStart } },
     });

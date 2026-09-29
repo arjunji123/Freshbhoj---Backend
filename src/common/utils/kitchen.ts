@@ -54,6 +54,20 @@ export function getIstCalendarDate(now: Date = new Date()): Date {
   return new Date(Date.UTC(istNow.getFullYear(), istNow.getMonth(), istNow.getDate()));
 }
 
+/**
+ * Converts a `getIstCalendarDate()`-shaped value (UTC midnight of an IST
+ * calendar date) into the genuine IST-midnight instant for that same date —
+ * up to 5.5h earlier in UTC. Day-count arithmetic (adding/subtracting whole
+ * days) on a `getIstCalendarDate()` value stays exact and calendar-date-safe,
+ * but the *result* must go through this conversion before it's compared
+ * against a real-time `DateTime` column (e.g. `createdAt`) — comparing the
+ * raw calendar-date value directly against real timestamps is off by up to
+ * 5.5h whenever "now" falls in IST 00:00–05:30.
+ */
+export function istMidnightUtcOf(calendarDate: Date): Date {
+  return new Date(calendarDate.getTime() - IST_OFFSET_MIN * 60_000);
+}
+
 const IST_DAY_NAMES: DayOfWeek[] = [
   DayOfWeek.SUNDAY,
   DayOfWeek.MONDAY,
