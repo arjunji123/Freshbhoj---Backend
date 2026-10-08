@@ -40,6 +40,8 @@ enum CoinTransactionReason {
   REFERRAL_REFEREE_BONUS
   ORDER_REDEMPTION
   SUBSCRIPTION_REDEMPTION
+  /// Coins spent on an order that was then cancelled — handed back.
+  ORDER_REFUND
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -65,10 +67,12 @@ model User {
   pincode   String?
 
   // Metadata
-  fcmToken    String? // Firebase push token
-  lastLoginAt DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  fcmToken            String? // Firebase push token
+  lastLoginAt         DateTime?
+  /// Notification inbox read marker — anything newer than this is "unread".
+  notificationsReadAt DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
 
   // Referral / FreshBhoj Coins
   referralCode     String?           @unique // Every user gets one at signup, shared to invite others

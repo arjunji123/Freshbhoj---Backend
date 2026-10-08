@@ -75,20 +75,35 @@ export class KitchensService {
       }),
     };
 
+    const select = {
+      ...KITCHEN_CARD_SELECT,
+      holidayOverrides: todayHolidayOverrideSelect(),
+      // One signature dish per card, exactly what the Home rail renders.
+      meals: {
+        where: { isAvailable: true },
+        orderBy: [{ isBestseller: 'desc' }, { orderCount: 'desc' }] as Prisma.MealOrderByWithRelationInput[],
+        take: 1,
+        select: { id: true, name: true, images: true, price: true },
+      },
+    };
+
+    // "Open only" depends on wall-clock time, which SQL can't filter on. Filter
+    // before paginating so pages stay full and `meta` stays truthful.
+    if (query.openOnly) {
+      const allRows = await this.prisma.kitchen.findMany({
+        where,
+        select,
+        orderBy: this.buildOrderBy(query.sortBy),
+      });
+      const open = allRows.map((row) => this.toKitchenCard(row)).filter((k) => k.isOpenNow);
+      const start = toSkip(page, limit);
+      return paginate(open.slice(start, start + limit), page, limit, open.length);
+    }
+
     const [rows, total] = await Promise.all([
       this.prisma.kitchen.findMany({
         where,
-        select: {
-          ...KITCHEN_CARD_SELECT,
-          holidayOverrides: todayHolidayOverrideSelect(),
-          // One signature dish per card, exactly what the Home rail renders.
-          meals: {
-            where: { isAvailable: true },
-            orderBy: [{ isBestseller: 'desc' }, { orderCount: 'desc' }],
-            take: 1,
-            select: { id: true, name: true, images: true, price: true },
-          },
-        },
+        select,
         orderBy: this.buildOrderBy(query.sortBy),
         skip: toSkip(page, limit),
         take: limit,
@@ -96,10 +111,12 @@ export class KitchensService {
       this.prisma.kitchen.count({ where }),
     ]);
 
-    let items = rows.map((row) => this.toKitchenCard(row));
-    if (query.openOnly) items = items.filter((k) => k.isOpenNow);
-
-    return paginate(items, page, limit, total);
+    return paginate(
+      rows.map((row) => this.toKitchenCard(row)),
+      page,
+      limit,
+      total,
+    );
   }
 
   // ──────────────────────────────────────────────────────────────────────────

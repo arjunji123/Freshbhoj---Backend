@@ -29,7 +29,8 @@ export class KitchenMenuService {
       select: MEAL_DETAIL_SELECT,
     });
 
-    return meals.map((meal) => toMealDetail(meal));
+    const cuisineSlugs = await this.cuisineSlugsFor(meals.map((meal) => meal.id));
+    return meals.map((meal) => ({ ...toMealDetail(meal), cuisineSlug: cuisineSlugs.get(meal.id) ?? null }));
   }
 
   async findOne(accountId: string, mealId: string) {
@@ -38,7 +39,7 @@ export class KitchenMenuService {
       where: { id: mealId },
       select: MEAL_DETAIL_SELECT,
     });
-    return toMealDetail(meal as any);
+    return this.withCuisine(toMealDetail(meal as any));
   }
 
   async create(accountId: string, dto: UpsertMealDto) {
@@ -104,7 +105,7 @@ export class KitchenMenuService {
     // First dish ever added moves the onboarding funnel forward.
     await this.onboardingService.markMenuStarted(accountId);
 
-    return toMealDetail(meal as any);
+    return this.withCuisine(toMealDetail(meal as any));
   }
 
   async update(accountId: string, mealId: string, dto: UpdateMealDto) {
@@ -123,6 +124,28 @@ export class KitchenMenuService {
     const updated = await this.prisma.meal.update({
       where: { id: mealId },
       data: {
+        ...(dto.customizationGroups !== undefined && {
+          // Replace-all semantics: order items snapshot their chosen
+          // customizations as JSON, so deleting old groups is safe.
+          customizationGroups: {
+            deleteMany: {},
+            create: dto.customizationGroups.map((group, groupIndex) => ({
+              name: group.name,
+              isRequired: group.isRequired ?? false,
+              minSelect: group.minSelect ?? 0,
+              maxSelect: group.maxSelect ?? 1,
+              sortOrder: groupIndex,
+              options: {
+                create: group.options.map((option, optionIndex) => ({
+                  name: option.name,
+                  priceDelta: option.priceDelta ?? 0,
+                  isDefault: option.isDefault ?? false,
+                  sortOrder: optionIndex,
+                })),
+              },
+            })),
+          },
+        }),
         ...(dto.name !== undefined && { name: dto.name }),
         ...(dto.description !== undefined && { description: dto.description }),
         ...(dto.images !== undefined && { images: dto.images }),
@@ -149,7 +172,7 @@ export class KitchenMenuService {
       select: MEAL_DETAIL_SELECT,
     });
 
-    return toMealDetail(updated as any);
+    return this.withCuisine(toMealDetail(updated as any));
   }
 
   async setAvailability(accountId: string, mealId: string, isAvailable: boolean) {
@@ -173,6 +196,21 @@ export class KitchenMenuService {
   // ──────────────────────────────────────────────────────────────────────────
   // INTERNAL
   // ──────────────────────────────────────────────────────────────────────────
+
+  /** The shared meal selector doesn't carry the cuisine; the edit form needs it to pre-select. */
+  private async cuisineSlugsFor(mealIds: string[]): Promise<Map<string, string | null>> {
+    if (!mealIds.length) return new Map();
+    const rows = await this.prisma.meal.findMany({
+      where: { id: { in: mealIds } },
+      select: { id: true, cuisine: { select: { slug: true } } },
+    });
+    return new Map(rows.map((row) => [row.id, row.cuisine?.slug ?? null]));
+  }
+
+  private async withCuisine<T extends { id: string }>(detail: T): Promise<T & { cuisineSlug: string | null }> {
+    const slugs = await this.cuisineSlugsFor([detail.id]);
+    return { ...detail, cuisineSlug: slugs.get(detail.id) ?? null };
+  }
 
   private assertPublishable(calories?: number | null, proteinG?: number | null) {
     if (calories === null || calories === undefined || proteinG === null || proteinG === undefined) {

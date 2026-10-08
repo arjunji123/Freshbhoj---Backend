@@ -105,6 +105,15 @@ export class OrdersService {
     if (dto.slotType === DeliverySlotType.SCHEDULED && !dto.scheduledFor) {
       throw new BadRequestException('Pick a delivery time for a scheduled order');
     }
+    if (dto.slotType === DeliverySlotType.SCHEDULED && dto.scheduledFor) {
+      const lead = new Date(dto.scheduledFor).getTime() - Date.now();
+      if (lead < 10 * 60_000) {
+        throw new BadRequestException('That delivery time has passed — please pick a later slot');
+      }
+      if (lead > 7 * 24 * 60 * 60_000) {
+        throw new BadRequestException('Scheduled orders can be placed up to 7 days ahead');
+      }
+    }
 
     // Re-price server-side. Never trust totals computed on the device.
     const pricedLines = items.map((item) => ({ item, priced: this.cartService.priceLine(item) }));
@@ -388,18 +397,21 @@ export class OrdersService {
       );
     }
 
-    const updated = await this.prisma.order.update({
-      where: { id: orderId },
-      data: {
-        status: OrderStatus.CANCELLED,
-        cancelledAt: new Date(),
-        cancelReason: dto.reason ?? 'Cancelled by customer',
-        ...(order.paymentStatus === PaymentStatus.PAID && { paymentStatus: PaymentStatus.REFUNDED }),
-        events: {
-          create: { status: OrderStatus.CANCELLED, note: dto.reason ?? 'Cancelled by customer' },
+    const reason = dto.reason ?? 'Cancelled by customer';
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const row = await tx.order.update({
+        where: { id: orderId },
+        data: {
+          status: OrderStatus.CANCELLED,
+          cancelledAt: new Date(),
+          cancelReason: reason,
+          ...(order.paymentStatus === PaymentStatus.PAID && { paymentStatus: PaymentStatus.REFUNDED }),
+          events: { create: { status: OrderStatus.CANCELLED, note: reason } },
         },
-      },
-      include: ORDER_INCLUDE,
+        include: ORDER_INCLUDE,
+      });
+      await this.settleCancellation(tx, order);
+      return row;
     });
 
     return this.toOrderDetail(updated);
@@ -417,18 +429,27 @@ export class OrdersService {
       throw new BadRequestException(`Cannot move an order from ${order.status} to ${next}`);
     }
 
-    const updated = await this.prisma.order.update({
-      where: { id: orderId },
-      data: {
-        status: next,
-        ...(next === OrderStatus.ACCEPTED && { acceptedAt: new Date() }),
-        ...(next === OrderStatus.DELIVERED && {
-          deliveredAt: new Date(),
-          paymentStatus: PaymentStatus.PAID,
-        }),
-        events: { create: { status: next, note } },
-      },
-      include: ORDER_INCLUDE,
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const row = await tx.order.update({
+        where: { id: orderId },
+        data: {
+          status: next,
+          ...(next === OrderStatus.ACCEPTED && { acceptedAt: new Date() }),
+          ...(next === OrderStatus.DELIVERED && {
+            deliveredAt: new Date(),
+            paymentStatus: PaymentStatus.PAID,
+          }),
+          ...(next === OrderStatus.CANCELLED && {
+            cancelledAt: new Date(),
+            cancelReason: note ?? 'Cancelled by the kitchen',
+            ...(order.paymentStatus === PaymentStatus.PAID && { paymentStatus: PaymentStatus.REFUNDED }),
+          }),
+          events: { create: { status: next, note } },
+        },
+        include: ORDER_INCLUDE,
+      });
+      if (next === OrderStatus.CANCELLED) await this.settleCancellation(tx, order);
+      return row;
     });
 
     return this.toOrderDetail(updated);
@@ -624,6 +645,35 @@ export class OrdersService {
       [OrderStatus.CANCELLED]: 'Cancelled',
     };
     return labels[status];
+  }
+
+  /**
+   * Gives back what a cancelled order already took: a wallet-funded charge
+   * returns to the wallet, and any FreshBhoj Coins that were spent come back.
+   * Coins are only spent once an order leaves PENDING_PAYMENT, so an order that
+   * never got that far has nothing to return. Runs inside the caller's
+   * transaction so the status change and the refund commit together.
+   */
+  private async settleCancellation(
+    tx: Prisma.TransactionClient,
+    order: { id: string; userId: string; orderNumber: string; status: OrderStatus; paymentMethod: PaymentMethod; paymentStatus: PaymentStatus; totalAmount: number; coinsRedeemed: number },
+  ) {
+    if (order.paymentMethod === PaymentMethod.WALLET && order.paymentStatus === PaymentStatus.PAID) {
+      await this.customerWalletService.credit(order.userId, order.totalAmount, 'REFUND', {
+        referenceId: order.id,
+        description: `Refund for cancelled order #${order.orderNumber}`,
+        tx,
+      });
+    }
+    if (order.coinsRedeemed > 0 && order.status !== OrderStatus.PENDING_PAYMENT) {
+      await tx.user.update({
+        where: { id: order.userId },
+        data: { coinsBalance: { increment: order.coinsRedeemed } },
+      });
+      await tx.coinTransaction.create({
+        data: { userId: order.userId, amount: order.coinsRedeemed, reason: CoinTransactionReason.ORDER_REFUND },
+      });
+    }
   }
 
   /**

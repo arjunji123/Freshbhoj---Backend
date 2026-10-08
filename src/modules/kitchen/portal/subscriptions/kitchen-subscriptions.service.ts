@@ -71,7 +71,14 @@ export class KitchenSubscriptionsService {
     const where: Prisma.SubscriptionWhereInput = {
       kitchenId: kitchen.id,
       ...(status ? { status } : {}),
-      ...(q ? { user: { fullName: { contains: q, mode: 'insensitive' } } } : {}),
+      ...(q
+        ? {
+            OR: [
+              { user: { fullName: { contains: q, mode: 'insensitive' as const } } },
+              { user: { phone: { contains: q } } },
+            ],
+          }
+        : {}),
     };
 
     const [rawRows, total, grouped] = await Promise.all([

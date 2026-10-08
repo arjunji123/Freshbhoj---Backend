@@ -243,6 +243,16 @@ export class UpdateMealDto {
   @ApiPropertyOptional() @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(180) prepTimeMins?: number;
   @ApiPropertyOptional() @IsOptional() @IsBoolean() isAvailable?: boolean;
   @ApiPropertyOptional() @IsOptional() @IsBoolean() isBestseller?: boolean;
+  @ApiPropertyOptional({
+    type: [CreateMealCustomizationGroupDto],
+    description: 'When present, REPLACES all of the dish’s customization groups (send [] to clear them). Omit to leave them untouched.',
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(6)
+  @ValidateNested({ each: true })
+  @Type(() => CreateMealCustomizationGroupDto)
+  customizationGroups?: CreateMealCustomizationGroupDto[];
 }
 
 export class MenuQueryDto {

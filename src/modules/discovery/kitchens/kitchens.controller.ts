@@ -31,7 +31,7 @@ export class KitchensController {
   @Get()
   @ApiOperation({
     summary: 'List curated kitchens',
-    description: '`openOnly` is applied after pagination, so a page may return fewer than `limit`.',
+    description: '`openOnly` hides kitchens that are closed right now; pagination is applied after that filter.',
   })
   @ApiEnvelopePaginated(KitchenCardDto)
   async list(@Query() query: KitchenQueryDto) {

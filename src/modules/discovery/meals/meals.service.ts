@@ -26,6 +26,24 @@ export class MealsService {
 
     const where = this.buildWhere(query);
 
+    // "Open only" depends on wall-clock time, which SQL can't filter on. A
+    // post-pagination filter would return short pages and a wrong total (and
+    // stall the app's infinite scroll), so in that mode we load the whole
+    // matching set, filter it, and paginate in memory.
+    if (query.openOnly) {
+      const [allRows, favouriteIds] = await Promise.all([
+        this.prisma.meal.findMany({
+          where,
+          select: MEAL_CARD_SELECT,
+          orderBy: this.buildOrderBy(query.sortBy),
+        }),
+        this.getFavouriteIds(userId),
+      ]);
+      const open = allRows.map((row) => toMealCard(row, favouriteIds)).filter((m) => m.isOrderable);
+      const start = toSkip(page, limit);
+      return paginate(open.slice(start, start + limit), page, limit, open.length);
+    }
+
     const [rows, total, favouriteIds] = await Promise.all([
       this.prisma.meal.findMany({
         where,
@@ -38,14 +56,12 @@ export class MealsService {
       this.getFavouriteIds(userId),
     ]);
 
-    let items = rows.map((row) => toMealCard(row, favouriteIds));
-
-    // "Open only" depends on wall-clock time, which SQL can't filter on here.
-    if (query.openOnly) {
-      items = items.filter((m) => m.isOrderable);
-    }
-
-    return paginate(items, page, limit, total);
+    return paginate(
+      rows.map((row) => toMealCard(row, favouriteIds)),
+      page,
+      limit,
+      total,
+    );
   }
 
   // ──────────────────────────────────────────────────────────────────────────

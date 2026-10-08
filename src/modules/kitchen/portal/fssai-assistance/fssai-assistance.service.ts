@@ -78,6 +78,11 @@ export class FssaiAssistanceService {
 
   async cancel(accountId: string) {
     const request = await this.requireActiveRequest(accountId);
+    // Once the fee is confirmed the application is with FreshBhoj/the
+    // government — it can no longer be withdrawn from the app.
+    if (request.status !== FssaiAssistanceStatus.PENDING_PAYMENT) {
+      throw new BadRequestException('This application has already been submitted and can no longer be cancelled');
+    }
     await this.prisma.fssaiAssistanceRequest.update({
       where: { id: request.id },
       data: { status: FssaiAssistanceStatus.CANCELLED },

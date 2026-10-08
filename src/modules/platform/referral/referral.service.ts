@@ -72,6 +72,8 @@ export class ReferralService {
       coinsBalance: user.coinsBalance,
       invitesCount,
       hasRedeemed: Boolean(user.referredById),
+      referrerBonusCoins: REFERRER_BONUS_COINS,
+      refereeBonusCoins: REFEREE_BONUS_COINS,
     };
   }
 

@@ -12,6 +12,12 @@ export class ReferralSummaryDto {
 
   @ApiProperty({ example: false, description: 'Whether this account has already redeemed a code' })
   hasRedeemed: boolean;
+
+  @ApiProperty({ example: 100, description: 'Coins the code owner earns when someone redeems their code' })
+  referrerBonusCoins: number;
+
+  @ApiProperty({ example: 50, description: 'Coins a new user earns for redeeming a code' })
+  refereeBonusCoins: number;
 }
 
 export class RedeemReferralResponseDto extends ReferralSummaryDto {

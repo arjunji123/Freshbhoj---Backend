@@ -11,7 +11,7 @@ export class ListSubscriptionsQueryDto extends PaginationQueryDto {
   @IsIn(STATUS_VALUES)
   status?: SubscriptionStatus;
 
-  @ApiPropertyOptional({ example: 'Meena', description: 'Matches against the subscriber name' })
+  @ApiPropertyOptional({ example: 'Meena', description: 'Matches against the subscriber name or phone number' })
   @IsOptional()
   @IsString()
   @MaxLength(100)

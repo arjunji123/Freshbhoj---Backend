@@ -30,7 +30,7 @@ export class MealsController {
   @ApiOperation({
     summary: 'List / search / filter meals (Home feed + Search)',
     description:
-      'Public, but personalises `isFavorite` when a bearer token is sent. `openOnly` is applied after pagination, so a page may return fewer than `limit` items.',
+      'Public, but personalises `isFavorite` when a bearer token is sent. `openOnly` hides meals that cannot be ordered right now; pagination is applied after that filter.',
   })
   @ApiEnvelopePaginated(MealCardDto, { description: 'Paginated meal cards' })
   async list(@Query() query: MealQueryDto, @OptionalUser() user?: User) {

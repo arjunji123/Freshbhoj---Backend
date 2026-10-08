@@ -24,6 +24,7 @@ import { WishlistModule } from './modules/customer/wishlist/wishlist.module';
 import { PaymentMethodsModule } from './modules/customer/payment-methods/payment-methods.module';
 import { SubscriptionsModule } from './modules/customer/subscriptions/subscriptions.module';
 import { CustomerWalletModule } from './modules/customer/wallet/wallet.module';
+import { CustomerNotificationsModule } from './modules/customer/notifications/notifications.module';
 
 // ── Discovery (browsable catalogue) ─────────────────────────────────────────
 import { CatalogModule } from './modules/discovery/catalog/catalog.module';
@@ -62,6 +63,7 @@ import { CouponsModule } from './modules/platform/coupons/coupons.module';
 import { SupportModule } from './modules/platform/support/support.module';
 import { ReferralModule } from './modules/platform/referral/referral.module';
 import { WebWaitlistModule } from './modules/platform/web-waitlist/web-waitlist.module';
+import { LegalModule } from './modules/platform/legal/legal.module';
 import appConfig from './config/app.config';
 import jwtConfig from './config/jwt.config';
 import redisConfig from './config/redis.config';
@@ -104,7 +106,9 @@ import geminiConfig from './config/gemini.config';
     PaymentMethodsModule,
     SubscriptionsModule,
     CustomerWalletModule,
+    CustomerNotificationsModule,
     SupportModule,
+    LegalModule,
     ReferralModule,
     // HomeModule aggregates the modules above, so it is registered last.
     HomeModule,
